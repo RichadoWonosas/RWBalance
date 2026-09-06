@@ -1,0 +1,27 @@
+# Every local reference/private directory beginning with an underscore
+**/_*/
+
+# Dependencies and generated output
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
+*.log
+
+# Secrets and machine-local configuration
+.env
+.env.*
+!.env.example
+*.local
+*.rwbl
+.codex/
+.agents/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini
