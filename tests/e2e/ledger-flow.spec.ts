@@ -8,7 +8,7 @@ test('creates, configures, locks and unlocks a local ledger', async ({ page }) =
   await page.getByLabel('确认口令').fill('test-passphrase')
   await page.getByRole('button', { name: '创建并进入' }).click()
   await expect(page.getByText('资金总览')).toBeVisible({ timeout: 15_000 })
-  await page.getByRole('button', { name: /设置/ }).click()
+  await page.locator('nav').getByRole('button', { name: /设置/ }).click()
   await expect(page.getByRole('heading', { name: '加密方式', exact: true })).toBeVisible()
   await page.getByRole('button', { name: /暂离/ }).click()
   await expect(page.getByText('选择一个账本')).toBeVisible({ timeout: 5_000 })

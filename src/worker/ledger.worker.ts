@@ -118,6 +118,8 @@ async function handle(command: LedgerWorkerCommand): Promise<LedgerWorkerResult>
     case 'list-indexes': return { indexes: await indexes() }
     case 'create': {
       await ensureUniqueName(command.name)
+      clearSession()
+      if (command.algorithms) algorithms = { ...command.algorithms, compression: 'deflate', serialization: 'json-v1' }
       ledger = createLedger(command.name)
       passphrase = command.secret
       try { await persist() } catch (error) { clearSession(); throw error }

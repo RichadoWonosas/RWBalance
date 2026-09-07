@@ -63,7 +63,7 @@ export const useLedgerStore = defineStore('ledger-session', () => {
   }
 
   async function initialize() { await run({ type: 'list-indexes' }) }
-  async function create(name: string, secret: string) { return run({ type: 'create', name, secret }) }
+  async function create(name: string, secret: string, algorithms?: { kdf: KdfId; encryption: EncryptionId }) { return run({ type: 'create', name, secret, algorithms }) }
   async function unlock(ledgerId: string, secret: string) { return run({ type: 'unlock', ledgerId, secret }) }
   async function refreshIndexes() { return run({ type: 'list-indexes' }) }
   function lock() { terminateSession() }

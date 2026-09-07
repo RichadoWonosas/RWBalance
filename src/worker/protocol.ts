@@ -28,7 +28,7 @@ export interface LedgerView {
 
 export type LedgerWorkerCommand =
   | { type: 'list-indexes' }
-  | { type: 'create'; name: string; secret: string }
+  | { type: 'create'; name: string; secret: string; algorithms?: Pick<SecurityAlgorithms, 'kdf' | 'encryption'> }
   | { type: 'unlock'; ledgerId: string; secret: string }
   | { type: 'lock' }
   | { type: 'add-account'; name: string; isPendingSpend: boolean; initial: Record<string, number> }

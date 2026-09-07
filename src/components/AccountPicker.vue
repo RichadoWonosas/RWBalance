@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import PickerDialog from './PickerDialog.vue'
 import type { Account } from '../core/domain/types'
 
 const props = defineProps<{
@@ -30,7 +31,7 @@ function choose(accountId: string) {
       <span :class="{ placeholder: !selectedAccount }">{{ selectedAccount?.name || placeholder }}</span>
       <b aria-hidden="true">⌄</b>
     </button>
-    <div class="collapse-shell" :class="{ open }" :aria-hidden="!open" :inert="!open">
+    <PickerDialog :open="open" :title="placeholder" @close="open = false">
       <div class="collapse-content">
         <section class="account-picker-panel">
           <input v-model="search" :placeholder="searchPlaceholder" :tabindex="open ? 0 : -1" />
@@ -48,6 +49,6 @@ function choose(accountId: string) {
           </div>
         </section>
       </div>
-    </div>
+    </PickerDialog>
   </div>
 </template>
