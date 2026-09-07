@@ -34,7 +34,7 @@ function choose(accountId: string) {
     <PickerDialog :open="open" :title="placeholder" @close="open = false">
       <div class="collapse-content">
         <section class="account-picker-panel">
-          <input v-model="search" :placeholder="searchPlaceholder" :tabindex="open ? 0 : -1" />
+          <input name="account-search" :aria-label="searchPlaceholder" v-model="search" :placeholder="searchPlaceholder" :tabindex="open ? 0 : -1" />
           <div class="account-picker-options">
             <button
               v-for="account in filteredAccounts"
