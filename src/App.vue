@@ -7,6 +7,7 @@ import type { PendingTag, TagDeletionResolution } from './core/domain/ledger'
 import { defaultTheme, normalizeHue, profileForHue, type ColorTone, type ThemeChannel } from './core/domain/theme'
 import { useLedgerStore } from './modules/ledger/session'
 import { appPages, type AppPage } from './app/router'
+import { applyPwaUpdate, pwaUpdateInstalling, pwaUpdateReady } from './app/pwa'
 import ThemeCompassHand from './components/ThemeCompassHand.vue'
 import PickerDialog from './components/PickerDialog.vue'
 import AccountPicker from './components/AccountPicker.vue'
@@ -54,6 +55,10 @@ function notify(type: ToastType, message: string) {
   if (toasts.value.length >= 5) toasts.value.shift()
   toasts.value.push(toast)
   window.setTimeout(() => dismissToast(toast.id), 5_000)
+}
+async function loadPwaUpdate() {
+  try { await applyPwaUpdate() }
+  catch { notify('error', '新版本载入失败，请稍后重试') }
 }
 watch(() => session.error, (error) => { if (error) notify('error', error) })
 watch(dialog, async (current, previous) => {
@@ -900,7 +905,10 @@ function toggleColorTone(event: Event) {
   </div>
   </Transition>
   <TransitionGroup name="toast" tag="div" class="toast-stack" aria-live="polite" aria-atomic="false">
-    <article v-for="toast in toasts" :key="toast.id" class="toast-message" :class="`toast-${toast.type}`">
+    <article v-if="pwaUpdateReady" key="pwa-update" class="toast-message toast-warning pwa-update-message">
+      <span class="toast-symbol">↻</span><p><strong>新版本已准备就绪</strong><small>立即载入以使用最新版本。</small></p><button class="pwa-update-button" :disabled="pwaUpdateInstalling" @click="loadPwaUpdate">{{ pwaUpdateInstalling ? '正在载入…' : '立即载入' }}</button>
+    </article>
+    <article v-for="toast in toasts.slice(pwaUpdateReady ? -4 : -5)" :key="toast.id" class="toast-message" :class="`toast-${toast.type}`">
       <span class="toast-symbol">{{ toast.type === 'success' ? '✓' : toast.type === 'warning' ? '!' : '×' }}</span><p>{{ toast.message }}</p><button :aria-label="`关闭提示：${toast.message}`" @click="dismissToast(toast.id)">×</button>
     </article>
   </TransitionGroup>

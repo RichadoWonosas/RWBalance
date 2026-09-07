@@ -3,6 +3,7 @@ import { createPinia } from 'pinia'
 import App from './App.vue'
 import { router } from './app/router'
 import { useLedgerStore } from './modules/ledger/session'
+import { initializePwa } from './app/pwa'
 import './styles/main.css'
 
 const app = createApp(App)
@@ -14,3 +15,4 @@ router.beforeEach((to) => {
   if (to.name === 'login' && session.isUnlocked) return { name: 'dashboard' }
 })
 app.use(router).mount('#app')
+initializePwa()
