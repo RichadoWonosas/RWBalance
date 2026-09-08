@@ -1,9 +1,9 @@
 /// <reference lib="webworker" />
 
-import { addAccount, addTag, addTransactionsWithTags, correctTransaction, createLedger, deleteAccount, deleteTag, effectiveTransaction, isTransactionDeleted, normalizeName, projectBalances, resolveAndDeleteTag, restoreAccount, restoreTransaction, reverseTransaction, transactionAuditChain, updateAccount, updateTransactionTags, validateLedgerData } from '../core/domain/ledger'
+import { addAccount, addTag, addTransactionsWithTags, correctTransaction, createLedger, deleteAccount, deleteTag, effectiveTransaction, isTransactionDeleted, normalizeName, projectBalances, resolveAndDeleteTag, restoreAccount, restoreTransaction, reverseTransaction, transactionAuditChain, updateAccount, updateTransactionTags, validateLedgerData, migrateLedgerV1, setTagParent } from '../core/domain/ledger'
 import { currencies, type Currency, type Ledger } from '../core/domain/types'
 import { decryptLedger, encryptLedger, openLedger, parseContainer, rewrapContainer, type EncryptedLedgerContainer, type SecurityAlgorithms } from '../core/security/crypto'
-import { deleteLedger, getContainer, getLedgerRecovery, listLedgerIndexes, restoreLedgerRecovery, saveLedger, type LedgerIndexEntry } from '../core/data/indexed-db/repository'
+import { deleteLedger, getMigrationBackup, getContainer, getLedgerRecovery, listLedgerIndexes, restoreLedgerRecovery, saveLedger, type LedgerIndexEntry } from '../core/data/indexed-db/repository'
 import type { LedgerView, LedgerWorkerCommand, LedgerWorkerRequest, LedgerWorkerResponse, LedgerWorkerResult } from './protocol'
 
 let ledger: Ledger | undefined
@@ -12,6 +12,7 @@ let dataKey: Uint8Array<ArrayBuffer> | undefined
 let algorithms: SecurityAlgorithms | undefined
 let activeContainer: EncryptedLedgerContainer | undefined
 let hasRecovery = false
+let hasMigrationBackup = false
 
 function clearSession() {
   ledger = undefined
@@ -21,6 +22,7 @@ function clearSession() {
   algorithms = undefined
   activeContainer = undefined
   hasRecovery = false
+  hasMigrationBackup = false
 }
 
 function requireLedger(): Ledger {
@@ -67,6 +69,9 @@ function createView(current: Ledger): LedgerView {
     settings: structuredClone(current.settings),
     security: structuredClone(algorithms!),
     hasRecovery,
+    hasMigrationBackup,
+    hierarchyChanges: structuredClone(current.hierarchyChanges ?? []),
+    tagReferences: structuredClone(current.transactions.filter(tx => tx.selectedTagIds.some(id => id !== '__system__'))),
     accounts: structuredClone(current.accounts),
     tags: structuredClone(current.tags),
     balances: projectBalances(current),
@@ -83,6 +88,7 @@ async function persistLedger(current: Ledger): Promise<void> {
   const existed = Boolean(await getContainer(current.id))
   const container = await encryptLedger(current, passphrase, { algorithms, dataKey })
   const verified = await openLedger(container, passphrase)
+  validateLedgerData(verified.ledger)
   await saveLedger(container, {
     ledgerId: current.id,
     displayName: current.name,
@@ -113,6 +119,20 @@ async function mutate(operation: (current: Ledger) => void): Promise<LedgerWorke
   return { view: createView(candidate), indexes: await indexes() }
 }
 
+function migrationPreview(current: Ledger, container: EncryptedLedgerContainer): LedgerWorkerResult {
+  // Validate the complete migration before even showing confirmation. No write or session data.
+  migrateLedgerV1(current)
+  return { migrationInfo: { name: current.name, tags: current.tags.length, transactions: current.transactions.length }, backupContainer: container, backupName: current.name + '-v1升级前备份' }
+}
+async function upgradedContainer(current: Ledger, secret: string, security: SecurityAlgorithms) {
+  const upgraded = await encryptLedger(migrateLedgerV1(current), secret, { algorithms: security })
+  validateLedgerData((await openLedger(upgraded, secret)).ledger)
+  return upgraded
+}
+async function saveMigrated(container: EncryptedLedgerContainer, current: Ledger, backup: EncryptedLedgerContainer) {
+  await saveLedger(container, { ledgerId: current.id, displayName: current.name, normalizedName: normalizeName(current.name), containerVersion: container.version, updatedAt: current.updatedAt }, backup)
+}
+
 async function handle(command: LedgerWorkerCommand): Promise<LedgerWorkerResult> {
   switch (command.type) {
     case 'list-indexes': return { indexes: await indexes() }
@@ -127,10 +147,18 @@ async function handle(command: LedgerWorkerCommand): Promise<LedgerWorkerResult>
     }
     case 'unlock': {
       clearSession()
-      const container = await getContainer(command.ledgerId)
+      let container = await getContainer(command.ledgerId)
       if (!container) throw new Error('找不到账本数据')
-      const opened = await openLedger(container, command.secret)
+      let opened = await openLedger(container, command.secret)
       validateLedgerData(opened.ledger)
+      if (opened.ledger.schemaVersion === 1) {
+        if (!command.confirmMigration) return migrationPreview(opened.ledger, container)
+        const backup = container
+        container = await upgradedContainer(opened.ledger, command.secret, opened.algorithms)
+        opened = await openLedger(container, command.secret)
+        await saveMigrated(container, opened.ledger, backup)
+      }
+      hasMigrationBackup = Boolean(await getMigrationBackup(container.ledgerId))
       ledger = opened.ledger
       passphrase = command.secret
       dataKey = opened.dataKey
@@ -144,9 +172,10 @@ async function handle(command: LedgerWorkerCommand): Promise<LedgerWorkerResult>
     case 'update-account': return mutate((current) => updateAccount(current, command.accountId, command.name, command.isPendingSpend))
     case 'delete-account': return mutate((current) => deleteAccount(current, command.accountId))
     case 'restore-account': return mutate((current) => restoreAccount(current, command.accountId))
-    case 'add-tag': return mutate((current) => addTag(current, command.name))
-    case 'delete-tag': return mutate((current) => deleteTag(current, command.tagId))
-    case 'resolve-delete-tag': return mutate((current) => resolveAndDeleteTag(current, command.tagId, command.resolutions))
+    case 'add-tag': return mutate((current) => addTag(current, command.name, command.parentId))
+    case 'set-tag-parent': return mutate(current => setTagParent(current, command.tagId, command.parentId))
+    case 'delete-tag': return mutate((current) => deleteTag(current, command.tagId, command.children))
+    case 'resolve-delete-tag': return mutate((current) => resolveAndDeleteTag(current, command.tagId, command.resolutions, command.children))
     case 'add-transactions': return mutate((current) => { addTransactionsWithTags(current, command.drafts, command.pendingTags ?? []) })
     case 'reverse-transaction': return mutate((current) => { reverseTransaction(current, command.transactionId) })
     case 'restore-transaction': return mutate((current) => { restoreTransaction(current, command.transactionId) })
@@ -197,14 +226,21 @@ async function handle(command: LedgerWorkerCommand): Promise<LedgerWorkerResult>
       const current = requireLedger()
       const recovery = await getLedgerRecovery(current.id)
       if (!recovery) throw new Error('没有可恢复的上一版本')
-      const opened = await openLedger(recovery.container, command.secret)
+      let container = recovery.container
+      let opened = await openLedger(container, command.secret)
       validateLedgerData(opened.ledger)
-      await restoreLedgerRecovery(current.id)
+      if (opened.ledger.schemaVersion === 1) {
+        if (!command.confirmMigration) return migrationPreview(opened.ledger, container)
+        container = await upgradedContainer(opened.ledger, command.secret, opened.algorithms)
+        opened = await openLedger(container, command.secret)
+        await saveMigrated(container, opened.ledger, recovery.container)
+        hasMigrationBackup = true
+      } else await restoreLedgerRecovery(current.id)
       ledger = opened.ledger
       passphrase = command.secret
       dataKey?.fill(0); dataKey = opened.dataKey
       algorithms = opened.algorithms
-      activeContainer = recovery.container
+      activeContainer = container
       hasRecovery = true
       return { view: createView(opened.ledger), indexes: await indexes() }
     }
@@ -243,6 +279,11 @@ async function handle(command: LedgerWorkerCommand): Promise<LedgerWorkerResult>
       if (ledger?.id === command.ledgerId) clearSession()
       return { indexes: await indexes(), view: ledger ? createView(ledger) : undefined }
     }
+    case 'get-migration-backup': {
+      const container = await getMigrationBackup(command.ledgerId)
+      if (!container) throw new Error('没有升级前备份')
+      return { container, exportName: '账本-v1升级前备份' }
+    }
     case 'get-container': {
       const container = await getContainer(command.ledgerId)
       if (!container) throw new Error('找不到账本数据')
@@ -261,7 +302,9 @@ async function handle(command: LedgerWorkerCommand): Promise<LedgerWorkerResult>
       const container = parseContainer(command.text)
       const opened = await openLedger(container, command.secret)
       validateLedgerData(opened.ledger)
-      const imported = opened.ledger
+      const legacy = opened.ledger.schemaVersion === 1
+      if (legacy && !command.confirmMigration) return migrationPreview(opened.ledger, container)
+      const imported = migrateLedgerV1(opened.ledger)
       const entries = await indexes()
       const idConflict = entries.find((entry) => entry.ledgerId === imported.id)
       const nameConflict = entries.find((entry) => entry.normalizedName === normalizeName(imported.name) && entry.ledgerId !== imported.id)
@@ -281,7 +324,9 @@ async function handle(command: LedgerWorkerCommand): Promise<LedgerWorkerResult>
         backupContainer = await getContainer(imported.id)
         backupName = `${idConflict.displayName}-替换前备份`
       }
-      await saveLedger(target, { ledgerId: targetLedger.id, displayName: targetLedger.name, normalizedName: normalizeName(targetLedger.name), containerVersion: target.version, updatedAt: targetLedger.updatedAt })
+      if (legacy && command.mode !== 'copy') target = await upgradedContainer(imported, command.secret, opened.algorithms)
+      validateLedgerData((await openLedger(target, command.secret)).ledger)
+      await saveLedger(target, { ledgerId: targetLedger.id, displayName: targetLedger.name, normalizedName: normalizeName(targetLedger.name), containerVersion: target.version, updatedAt: targetLedger.updatedAt }, legacy ? container : undefined)
       return { indexes: await indexes(), backupContainer, backupName }
     }
   }

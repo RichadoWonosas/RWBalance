@@ -2,7 +2,7 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import type { AppearanceSettings } from '../../core/domain/theme'
 import type { TransactionDraft } from '../../core/domain/types'
-import type { PendingTag, TagDeletionResolution } from '../../core/domain/ledger'
+import type { PendingTag, TagDeletionResolution, TagChildDisposition } from '../../core/domain/ledger'
 import type { LedgerIndexEntry } from '../../core/data/indexed-db/repository'
 import { createLedgerWorkerClient, type LedgerWorkerClient } from '../../worker/client'
 import type { LedgerView, LedgerWorkerCommand, LedgerWorkerResult } from '../../worker/protocol'
@@ -26,6 +26,22 @@ export const useLedgerStore = defineStore('ledger-session', () => {
   const busy = ref(false)
   const error = ref('')
   let client: LedgerWorkerClient | undefined
+  const migration = ref<Pick<LedgerWorkerResult, 'migrationInfo' | 'backupContainer' | 'backupName'>>()
+  let decideMigration: ((confirmed: boolean) => void) | undefined
+  function confirmMigration(confirmed: boolean) {
+    const resolve = decideMigration
+    migration.value = undefined
+    decideMigration = undefined
+    resolve?.(confirmed)
+  }
+  function exportMigrationPreview() {
+    if (migration.value?.backupContainer) downloadContainer(migration.value.backupContainer, migration.value.backupName ?? 'v1升级前备份')
+  }
+  async function exportMigrationBackup() {
+    if (!ledger.value) return
+    const result = await run({ type: 'get-migration-backup', ledgerId: ledger.value.id })
+    if (result?.container) downloadContainer(result.container, result.exportName ?? 'v1升级前备份')
+  }
 
   const isUnlocked = computed(() => Boolean(ledger.value))
 
@@ -40,10 +56,20 @@ export const useLedgerStore = defineStore('ledger-session', () => {
   }
 
   async function run(command: LedgerWorkerCommand): Promise<LedgerWorkerResult | undefined> {
+    if (migration.value) return undefined
     busy.value = true
     error.value = ''
     try {
-      const result = await worker().request(command)
+      // Protocol payloads are JSON data; Vue proxies cannot be structured-cloned by postMessage.
+      command = JSON.parse(JSON.stringify(command)) as LedgerWorkerCommand
+      let result = await worker().request(command)
+      if (result.migrationInfo) {
+        migration.value = result
+        const confirmed = await new Promise<boolean>(resolve => { decideMigration = resolve })
+        if (!confirmed) return undefined
+        if (command.type !== 'unlock' && command.type !== 'import' && command.type !== 'restore-recovery') throw new Error('无效的升级操作')
+        result = await worker().request({ ...command, confirmMigration: true })
+      }
       apply(result)
       return result
     } catch (cause) {
@@ -55,6 +81,7 @@ export const useLedgerStore = defineStore('ledger-session', () => {
   }
 
   function terminateSession() {
+    confirmMigration(false)
     client?.terminate()
     client = undefined
     ledger.value = undefined
@@ -77,9 +104,10 @@ export const useLedgerStore = defineStore('ledger-session', () => {
   async function updateAccount(accountId: string, name: string, isPendingSpend: boolean) { return run({ type: 'update-account', accountId, name, isPendingSpend }) }
   async function deleteAccount(accountId: string) { return run({ type: 'delete-account', accountId }) }
   async function restoreAccount(accountId: string) { return run({ type: 'restore-account', accountId }) }
-  async function addTag(name: string) { return run({ type: 'add-tag', name }) }
-  async function deleteTag(tagId: string) { return run({ type: 'delete-tag', tagId }) }
-  async function resolveDeleteTag(tagId: string, resolutions: TagDeletionResolution[]) { return run({ type: 'resolve-delete-tag', tagId, resolutions }) }
+  async function addTag(name: string, parentId?: string) { return run({ type: 'add-tag', name, parentId }) }
+  async function setTagParent(tagId: string, parentId?: string) { return run({ type: 'set-tag-parent', tagId, parentId }) }
+  async function deleteTag(tagId: string, children?: TagChildDisposition) { return run({ type: 'delete-tag', tagId, children }) }
+  async function resolveDeleteTag(tagId: string, resolutions: TagDeletionResolution[], children?: TagChildDisposition) { return run({ type: 'resolve-delete-tag', tagId, resolutions, children }) }
   async function addTransactions(drafts: TransactionDraft[], pendingTags: PendingTag[] = []) { return run({ type: 'add-transactions', drafts, pendingTags }) }
   async function reverseTransaction(transactionId: string) { return run({ type: 'reverse-transaction', transactionId }) }
   async function restoreTransaction(transactionId: string) { return run({ type: 'restore-transaction', transactionId }) }
@@ -107,7 +135,7 @@ export const useLedgerStore = defineStore('ledger-session', () => {
   async function restoreRecovery(secret: string) { return run({ type: 'restore-recovery', secret }) }
 
   return {
-    ledger, indexes, busy, error, isUnlocked,
+    ledger, indexes, busy, error, isUnlocked, migration, confirmMigration, exportMigrationPreview, exportMigrationBackup, setTagParent,
     initialize, refreshIndexes, create, unlock, lock, terminateSession, remove, rename,
     addAccount, updateAccount, deleteAccount, restoreAccount, addTag, deleteTag, resolveDeleteTag, addTransactions,
     reverseTransaction, restoreTransaction, updateTransactionTags, correctTransaction, setAppearance, setAutoLockSeconds, exportById, exportCurrent,

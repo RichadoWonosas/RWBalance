@@ -1,16 +1,19 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
+import { rootTagId, tagPath } from '../core/domain/tag-hierarchy'
+import { vBackdropDismiss } from '../app/backdrop-dismiss'
 import { currencies, type Currency, type Transaction } from '../core/domain/types'
 import { currencyRules, formatMinorUnits } from '../core/domain/money'
 import type { LedgerView } from '../worker/protocol'
 
 const props = defineProps<{ ledger: LedgerView; primaryHue: number; secondaryHue: number }>()
-const emit = defineEmits<{ drill: [filters: { currency?: Currency; kind?: string; accountId?: string; tagId?: string }] }>()
+const emit = defineEmits<{ drill: [filters: { currency?: Currency; kind?: string; accountId?: string; tagId?: string; tagMode?: string; bookedFrom?: string; bookedTo?: string }] }>()
 type RangePreset = '30' | '90' | 'year' | 'custom'
 const preset = ref<RangePreset>('30')
 const customFrom = ref('')
 const customTo = ref(new Date().toISOString().slice(0, 10))
 const chartCurrency = ref<Currency>('CNY')
+const primaryGrouping = ref<'exact' | 'root'>('exact')
 const exportOpen = ref(false)
 const redactExport = ref(true)
 const reportCanvas = ref<HTMLCanvasElement>()
@@ -57,10 +60,13 @@ const tagTotals = computed(() => {
   const primary = new Map<string, number>(); const included = new Map<string, number>()
   for (const tx of transactions.value) {
     if (tx.kind !== 'expense' || tx.sourceMoney?.currency !== chartCurrency.value) continue
-    if (tx.primaryTagId) primary.set(tx.primaryTagId, (primary.get(tx.primaryTagId) ?? 0) + tx.sourceMoney.minorUnits)
+    if (tx.primaryTagId) {
+      const id = primaryGrouping.value === 'root' ? rootTagId(props.ledger.tags, tx.primaryTagId) : tx.primaryTagId
+      primary.set(id, (primary.get(id) ?? 0) + tx.sourceMoney.minorUnits)
+    }
     for (const tagId of tx.selectedTagIds) included.set(tagId, (included.get(tagId) ?? 0) + tx.sourceMoney.minorUnits)
   }
-  const rank = (map: Map<string, number>) => [...map].map(([tagId, value]) => ({ tagId, name: props.ledger.tags.find((tag) => tag.id === tagId)?.name ?? '系统标签', value })).sort((a, b) => b.value - a.value)
+  const rank = (map: Map<string, number>) => [...map].map(([tagId, value]) => ({ tagId, name: tagPath(props.ledger.tags, tagId) || '系统标签', value })).sort((a, b) => b.value - a.value)
   return { primary: rank(primary), included: rank(included) }
 })
 const donutGradient = computed(() => {
@@ -106,11 +112,14 @@ async function drawReport() {
   accountBars.value.forEach(({ account, value }) => line(redactExport.value ? accountAliases.get(account.id)! : account.name, redactExport.value ? relative(value, maxAccountBalance.value) : formatMinorUnits(value, chartCurrency.value), value / maxAccountBalance.value))
   y += 18; heading(`${chartCurrency.value} 收支趋势`)
   trend.value.forEach((row,index) => line(redactExport.value ? `时间点 ${index + 1}` : row.date, redactExport.value ? `${relative(row.income,trendMax.value)} / ${relative(row.expense,trendMax.value)}` : `收入 ${formatMinorUnits(row.income,chartCurrency.value)} · 支出 ${formatMinorUnits(row.expense,chartCurrency.value)}`))
-  y += 18; heading('主标签 / 任意包含标签排行')
+  y += 18; heading(primaryGrouping.value === 'root' ? '主标签按根级汇总 / 包含子标签排行' : '精确主标签 / 包含子标签排行')
   for (const mode of ['primary', 'included'] as const) { line(mode === 'primary' ? '主标签口径' : '任意包含口径', ''); const max = Math.max(1, ...tagTotals.value[mode].map((row) => row.value)); tagTotals.value[mode].forEach((row) => line(redactExport.value ? tagAliases.get(row.tagId) ?? '系统标签' : row.name, redactExport.value ? relative(row.value, max) : formatMinorUnits(row.value, chartCurrency.value), row.value / max)) }
   y += 18; heading('换汇隐含汇率')
   if (!exchangeRows.value.length) line('所选范围内没有跨币种转移', '')
   exchangeRows.value.forEach((row, index) => line(redactExport.value ? `换汇记录 ${index + 1}` : `${row.date} · ${row.pair}`, redactExport.value ? '保留相对趋势' : `1 ${row.pair.split('/')[0]} ≈ ${row.rate.toFixed(6)} ${row.pair.split('/')[1]}`))
+}
+function drillTag(tagId: string, mode: 'primary' | 'included') {
+  emit('drill', { tagId, currency: chartCurrency.value, kind: 'expense', tagMode: mode === 'included' ? 'included' : primaryGrouping.value === 'root' ? 'primary-root' : 'primary', bookedFrom: range.value.from, bookedTo: range.value.to })
 }
 async function openExport() { exportOpen.value = true; await drawReport() }
 watch(redactExport, () => { if (exportOpen.value) void drawReport() })
@@ -125,9 +134,9 @@ async function savePng() { await drawReport(); reportCanvas.value?.toBlob((blob)
   <section class="surface"><div class="section-title"><div><span class="eyebrow">ACCOUNT BALANCES</span><h3>总体余额</h3></div><select name="chart-currency" aria-label="统计币种" v-model="chartCurrency" class="compact-select"><option v-for="currency in currencies" :key="currency">{{ currency }}</option></select></div><div class="bar-chart"><button v-for="row in accountBars" :key="row.account.id" @click="emit('drill',{ accountId:row.account.id,currency:chartCurrency })"><span>{{ row.account.name }}</span><i :style="{ width:`${row.value / maxAccountBalance * 100}%` }"></i><b>{{ formatMinorUnits(row.value, chartCurrency) }}</b></button></div><details><summary>查看等价数据表</summary><table><tbody><tr v-for="row in accountBars" :key="row.account.id"><th>{{ row.account.name }}</th><td>{{ formatMinorUnits(row.value, chartCurrency) }}</td></tr></tbody></table></details></section>
   <div class="analytics-grid">
     <section class="surface"><span class="eyebrow">CASH FLOW</span><h3>收支趋势 · {{ chartCurrency }}</h3><svg class="line-chart" viewBox="0 0 100 100" role="img" aria-label="收入与支出趋势图"><polyline class="income-line" :points="trendPoints('income')"/><polyline class="expense-line" :points="trendPoints('expense')"/></svg><div class="chart-legend"><span class="income-dot">收入</span><span class="expense-dot">支出</span></div><details><summary>查看等价数据表</summary><table><thead><tr><th>日期</th><th>收入</th><th>支出</th></tr></thead><tbody><tr v-for="row in trend" :key="row.date"><td>{{ row.date }}</td><td>{{ formatMinorUnits(row.income,chartCurrency) }}</td><td>{{ formatMinorUnits(row.expense,chartCurrency) }}</td></tr></tbody></table></details></section>
-    <section class="surface"><span class="eyebrow">PRIMARY TAGS</span><h3>支出类型圆环图 · {{ chartCurrency }}</h3><div class="donut-layout"><div class="donut" :style="{ background:donutGradient }"><span>{{ tagTotals.primary.length }} 类</span></div><ol><li v-for="row in tagTotals.primary" :key="row.tagId"><button @click="emit('drill',{ tagId:row.tagId,currency:chartCurrency })">{{ row.name }}</button><b>{{ formatMinorUnits(row.value,chartCurrency) }}</b></li></ol></div><details><summary>查看等价数据表</summary><table><tbody><tr v-for="row in tagTotals.primary" :key="row.tagId"><th>{{ row.name }}</th><td>{{ formatMinorUnits(row.value,chartCurrency) }}</td></tr></tbody></table></details></section>
+    <section class="surface"><span class="eyebrow">PRIMARY TAGS</span><h3>支出类型圆环图 · {{ chartCurrency }}</h3><label>主标签统计口径<select name="primary-grouping" v-model="primaryGrouping"><option value="exact">精确主标签</option><option value="root">按根级祖先汇总</option></select></label><p class="field-help">每笔支出仅计入一个扇区，父子标签不重复计费。</p><div class="donut-layout"><div class="donut" :style="{ background:donutGradient }"><span>{{ tagTotals.primary.length }} 类</span></div><ol><li v-for="row in tagTotals.primary" :key="row.tagId"><button @click="drillTag(row.tagId, 'primary')">{{ row.name }}</button><b>{{ formatMinorUnits(row.value,chartCurrency) }}</b></li></ol></div><details><summary>查看等价数据表</summary><table><tbody><tr v-for="row in tagTotals.primary" :key="row.tagId"><th>{{ row.name }}</th><td>{{ formatMinorUnits(row.value,chartCurrency) }}</td></tr></tbody></table></details></section>
   </div>
-  <div class="analytics-grid"><section v-for="mode in (['primary','included'] as const)" :key="mode" class="surface"><span class="eyebrow">TAG RANKING</span><h3>{{ mode === 'primary' ? '主标签支出排行' : '任意包含标签支出排行' }}</h3><ol class="rank-list"><li v-for="row in tagTotals[mode]" :key="row.tagId"><button @click="emit('drill',{ tagId:row.tagId,currency:chartCurrency })">{{ row.name }}</button><i :style="{ width:`${row.value / Math.max(1,...tagTotals[mode].map(item=>item.value)) * 100}%` }"></i><b>{{ formatMinorUnits(row.value,chartCurrency) }}</b></li><li v-if="!tagTotals[mode].length">暂无支出</li></ol></section></div>
+  <div class="analytics-grid"><section v-for="mode in (['primary','included'] as const)" :key="mode" class="surface"><span class="eyebrow">TAG RANKING</span><h3>{{ mode === 'primary' ? (primaryGrouping === 'root' ? '主标签按根级汇总' : '精确主标签支出排行') : '包含子标签支出排行（跨标签不可相加）' }}</h3><ol class="rank-list"><li v-for="row in tagTotals[mode]" :key="row.tagId"><button @click="drillTag(row.tagId, mode)">{{ row.name }}</button><i :style="{ width:`${row.value / Math.max(1,...tagTotals[mode].map(item=>item.value)) * 100}%` }"></i><b>{{ formatMinorUnits(row.value,chartCurrency) }}</b></li><li v-if="!tagTotals[mode].length">暂无支出</li></ol></section></div>
   <section class="surface"><div class="section-title"><div><span class="eyebrow">EXCHANGE RATE</span><h3>银行换汇隐含汇率</h3></div><select name="exchange-pair" aria-label="换汇币种对" v-model="exchangePair" class="compact-select"><option v-for="pair in exchangePairs" :key="pair">{{ pair }}</option></select></div><svg v-if="selectedExchange.length" class="line-chart exchange" viewBox="0 0 100 100" role="img" :aria-label="`${exchangePair} 隐含汇率趋势图`"><polyline :points="exchangePoints"/></svg><div v-else class="empty compact">所选范围内没有跨币种转移</div><details v-if="selectedExchange.length"><summary>查看等价数据表</summary><table><thead><tr><th>日期</th><th>方向</th><th>隐含汇率</th></tr></thead><tbody><tr v-for="row in selectedExchange" :key="row.id"><td>{{ row.date }}</td><td>{{ row.pair }}</td><td>{{ row.rate.toFixed(8) }}</td></tr></tbody></table></details></section>
-  <Transition name="modal-motion"><div v-if="exportOpen" class="modal-backdrop" @click.self="exportOpen=false"><section class="modal export-modal"><button class="modal-close" @click="exportOpen=false">×</button><span class="eyebrow">EXPORT PREVIEW</span><h2>统计图片预览</h2><label class="privacy-toggle"><input name="redact-export" v-model="redactExport" type="checkbox" />启用关键信息脱敏（默认）</label><p v-if="!redactExport" class="export-warning">警告：图片将包含真实账本名称、账户、标签、金额和日期。</p><div class="canvas-preview"><canvas ref="reportCanvas"></canvas></div><div class="modal-actions"><button class="ghost" @click="exportOpen=false">取消</button><button class="primary" @click="savePng">保存 PNG</button></div></section></div></Transition>
+  <Transition name="modal-motion"><div v-if="exportOpen" class="modal-backdrop" v-backdrop-dismiss="() => { exportOpen = false }"><section class="modal export-modal"><button class="modal-close" @click="exportOpen=false">×</button><span class="eyebrow">EXPORT PREVIEW</span><h2>统计图片预览</h2><label class="privacy-toggle"><input name="redact-export" v-model="redactExport" type="checkbox" />启用关键信息脱敏（默认）</label><p v-if="!redactExport" class="export-warning">警告：图片将包含真实账本名称、账户、标签、金额和日期。</p><div class="canvas-preview"><canvas ref="reportCanvas"></canvas></div><div class="modal-actions"><button class="ghost" @click="exportOpen=false">取消</button><button class="primary" @click="savePng">保存 PNG</button></div></section></div></Transition>
 </template>

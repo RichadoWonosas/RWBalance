@@ -25,6 +25,7 @@ export interface Account {
 
 export interface Tag {
   id: string
+  parentId?: string
   name: string
   normalizedName: string
   createdAt: string
@@ -39,6 +40,8 @@ export interface Transaction {
   destinationAccountId?: string
   destinationMoney?: Money
   selectedTagIds: string[]
+  /** Absent only in schema v1. Direct selections, in user-selected order. */
+  explicitTagIds?: string[]
   primaryTagId?: string
   note: string
   bookedAt: string
@@ -53,7 +56,8 @@ export interface Transaction {
 export interface Ledger {
   id: string
   name: string
-  schemaVersion: 1
+  schemaVersion: 1 | 2
+  hierarchyChanges?: { tagId: string; previousParentId?: string; parentId?: string; changedAt: string; affectedTransactions: number; action: 'reparent' | 'delete' }[]
   createdAt: string
   updatedAt: string
   accounts: Account[]

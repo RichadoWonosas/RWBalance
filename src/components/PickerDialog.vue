@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from 'vue'
+import { vBackdropDismiss } from '../app/backdrop-dismiss'
 const props = defineProps<{ open: boolean; title: string }>()
 const emit = defineEmits<{ close: [] }>()
 const panel = ref<HTMLElement>()
@@ -21,7 +22,7 @@ function keyboard(event: KeyboardEvent) {
 </script>
 <template>
   <Teleport to="body"><Transition name="modal-motion">
-    <div v-if="open" class="modal-backdrop picker-backdrop" @click.self="emit('close')" @keydown="keyboard">
+    <div v-if="open" class="modal-backdrop picker-backdrop" v-backdrop-dismiss="() => emit('close')" @keydown="keyboard">
       <section ref="panel" class="modal picker-dialog" role="dialog" aria-modal="true" :aria-label="title" tabindex="-1">
         <button class="modal-close" aria-label="关闭选择器" @click="emit('close')">×</button>
         <h2>{{ title }}</h2><slot />

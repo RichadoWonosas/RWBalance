@@ -95,7 +95,8 @@ async function openLegacy(container: LegacyEncryptedLedgerContainer, passphrase:
   const aad = container.appearance === undefined ? `rwbalance:1:${container.ledgerId}` : `rwbalance:1:${container.ledgerId}:${container.appearance}`
   const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: base64ToBytes(container.encryption.iv), additionalData: encoder.encode(aad) }, key, base64ToBytes(container.ciphertext))
   const ledger = JSON.parse(decoder.decode(await decompress(new Uint8Array(plaintext), 'deflate'))) as Ledger
-  if (ledger.id !== container.ledgerId || ledger.schemaVersion !== 1) throw new Error('invalid')
+  if (ledger.schemaVersion !== 1 && ledger.schemaVersion !== 2) throw new Error('不支持此账本数据版本，请更新客户端')
+  if (ledger.id !== container.ledgerId) throw new Error('invalid')
   return { ledger: restoreAppearance(ledger, container.appearance), dataKey: crypto.getRandomValues(new Uint8Array(32)), algorithms: { ...defaultSecurityAlgorithms }, container }
 }
 async function openCurrent(container: CurrentEncryptedLedgerContainer, passphrase: string): Promise<OpenLedgerResult> {
@@ -105,7 +106,8 @@ async function openCurrent(container: CurrentEncryptedLedgerContainer, passphras
   const dataKey = new Uint8Array(rawDataKey)
   const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: base64ToBytes(container.encryption.bodyIv), additionalData: bodyAad(container) }, await importDataKey(dataKey), base64ToBytes(container.ciphertext))
   const ledger = JSON.parse(decoder.decode(await decompress(new Uint8Array(plaintext), container.compression.id))) as Ledger
-  if (ledger.id !== container.ledgerId || ledger.schemaVersion !== 1) throw new Error('invalid')
+  if (ledger.schemaVersion !== 1 && ledger.schemaVersion !== 2) throw new Error('不支持此账本数据版本，请更新客户端')
+  if (ledger.id !== container.ledgerId) throw new Error('invalid')
   return { ledger: restoreAppearance(ledger, container.appearance), dataKey, algorithms, container }
 }
 export async function openLedger(container: EncryptedLedgerContainer, passphrase: string): Promise<OpenLedgerResult> {
