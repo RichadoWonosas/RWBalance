@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { addAccount, addTag, addTransactions, addTransactionsWithTags, correctTransaction, createLedger, deleteAccount, deleteTag, directTags, migrateLedgerV1, previewTagParent, projectBalances, resolveAndDeleteTag, restoreAccount, restoreTransaction, reverseTransaction, setTagParent, updateTransactionTags, validateLedgerData } from '../../src/core/domain/ledger'
+import { addAccount, addTag, addTransactions, addTransactionsWithTags, correctTransaction, createLedger, deleteAccount, deleteTag, directTags, migrateLedgerV1, previewTagParent, projectBalances, resolveAndDeleteTag, restoreAccount, restoreTransaction, reverseTransaction, setTagParent, updateTag, updateTransactionTags, validateLedgerData } from '../../src/core/domain/ledger'
 import { expandTagAncestors, rootTagId } from '../../src/core/domain/tag-hierarchy'
 import { decryptLedger, encryptLedger } from '../../src/core/security/crypto'
 import type { Ledger, TransactionDraft } from '../../src/core/domain/types'
@@ -50,6 +50,16 @@ describe('subtags and schema migration', () => {
     tx!.selectedTagIds = expandTagAncestors(ledger.tags, tx!.explicitTagIds!)
     parent.parentId = leaf.id
     expect(() => validateLedgerData(ledger)).toThrow('成环')
+  })
+  it('renames a tag atomically and accepts an equivalent normalized display name', () => {
+    const ledger = createLedger('标签重命名')
+    const tag = addTag(ledger, 'Game')
+    updateTag(ledger, tag.id, 'ＧＡＭＥ')
+    expect(tag).toMatchObject({ name: 'ＧＡＭＥ', normalizedName: 'game' })
+    const other = addTag(ledger, 'Other')
+    expect(() => updateTag(ledger, other.id, 'game')).toThrow('名称已存在')
+    expect(other.name).toBe('Other')
+    validateLedgerData(ledger)
   })
   it('requires a child disposition and retains descendants on parent deletion', () => {
     const { ledger, parent, child, leaf, draft } = fixture()

@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { assertCanSetParent, expandTagAncestors, validateTagHierarchy } from '../../src/core/domain/tag-hierarchy'
+import { assertCanSetParent, expandTagAncestors, flattenTagHierarchy, validateTagHierarchy } from '../../src/core/domain/tag-hierarchy'
 
 const tags = [{ id: 'entertainment' }, { id: 'games', parentId: 'entertainment' }, { id: 'dlc', parentId: 'games' }, { id: 'films', parentId: 'entertainment' }]
 it('rejects self, descendant, disconnected cycles, duplicate IDs and missing parents', () => {
@@ -22,4 +22,16 @@ it('validates deeply nested imported trees without recursion', () => {
   const deep = Array.from({ length: 10000 }, (_, i) => ({ id: String(i), parentId: i ? String(i - 1) : undefined }))
   expect(() => validateTagHierarchy(deep)).not.toThrow()
   expect(expandTagAncestors(deep, ['9999'])).toHaveLength(10000)
+})
+it('groups descendants directly after each parent using hierarchy then creation order', () => {
+  const dated = [
+    { id: 'a', createdAt: '2026-01-01' },
+    { id: 'b', createdAt: '2026-01-02' },
+    { id: 'a-1', parentId: 'a', createdAt: '2026-01-03' },
+    { id: 'a-1-1', parentId: 'a-1', createdAt: '2026-01-05' },
+    { id: 'a-2', parentId: 'a', createdAt: '2026-01-04' },
+  ]
+  expect(flattenTagHierarchy(dated).map(row => [row.tag.id, row.depth, row.hasChildren])).toEqual([
+    ['a', 0, true], ['a-1', 1, true], ['a-1-1', 2, false], ['a-2', 1, false], ['b', 0, false],
+  ])
 })

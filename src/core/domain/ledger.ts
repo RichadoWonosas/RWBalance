@@ -259,6 +259,24 @@ export function addTag(ledger: Ledger, name: string, parentId?: string): Tag {
   return tag
 }
 
+export function updateTag(ledger: Ledger, tagId: string, name: string, parentId?: string): Tag {
+  const tag = ledger.tags.find(item => item.id === tagId)
+  if (!tag) throw new Error('标签不存在')
+  const cleanName = name.trim()
+  const normalizedName = normalizeName(cleanName)
+  if (!normalizedName) throw new Error('标签名称不能为空')
+  // A display-only rename that normalizes to the current value is valid.
+  if (ledger.tags.some(item => item.id !== tagId && item.normalizedName === normalizedName)) throw new Error('标签名称已存在')
+  assertCanSetParent(ledger.tags, tagId, parentId)
+  if (tag.parentId !== parentId) setTagParent(ledger, tagId, parentId)
+  const timestamp = now()
+  tag.name = cleanName
+  tag.normalizedName = normalizedName
+  tag.updatedAt = timestamp
+  ledger.updatedAt = timestamp
+  return tag
+}
+
 /** Direct selections are authoritative; internal markers stay outside the user tree. */
 export function directTags(transaction: Transaction): string[] { return transaction.explicitTagIds ?? transaction.selectedTagIds }
 function expandTransactionTags(tags: Tag[], direct: string[]): string[] {

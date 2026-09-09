@@ -28,6 +28,26 @@ export function rootTagId(tags: readonly HierarchyTag[], id: string): string {
   return expandTagAncestors(tags, [id]).at(-1) ?? id
 }
 
+export interface HierarchyRow<T> { tag: T; depth: number; hasChildren: boolean }
+
+/** Pre-order tree traversal. Siblings retain creation order, then source order. */
+export function flattenTagHierarchy<T extends HierarchyTag & { createdAt: string }>(tags: readonly T[]): HierarchyRow<T>[] {
+  validateTagHierarchy(tags)
+  const sourceOrder = new Map(tags.map((tag, index) => [tag.id, index]))
+  const children = new Map<string | undefined, T[]>()
+  for (const tag of tags) children.set(tag.parentId, [...(children.get(tag.parentId) ?? []), tag])
+  const sort = (items: T[]) => items.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || sourceOrder.get(a.id)! - sourceOrder.get(b.id)!)
+  for (const items of children.values()) sort(items)
+  const rows: HierarchyRow<T>[] = [], stack = [...(children.get(undefined) ?? [])].reverse().map(tag => ({ tag, depth: 0 }))
+  while (stack.length) {
+    const item = stack.pop()!
+    const descendants = children.get(item.tag.id) ?? []
+    rows.push({ ...item, hasChildren: descendants.length > 0 })
+    for (let index = descendants.length - 1; index >= 0; index--) stack.push({ tag: descendants[index]!, depth: item.depth + 1 })
+  }
+  return rows
+}
+
 export function assertCanSetParent(tags: readonly HierarchyTag[], childId: string, parentId?: string): void {
   const index = indexTags(tags)
   if (!index.has(childId)) throw new Error('标签不存在')

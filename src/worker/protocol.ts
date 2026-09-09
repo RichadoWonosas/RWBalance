@@ -39,6 +39,7 @@ export type LedgerWorkerCommand =
   | { type: 'delete-account'; accountId: string }
   | { type: 'restore-account'; accountId: string }
   | { type: 'add-tag'; name: string; parentId?: string }
+  | { type: 'update-tag'; tagId: string; name: string; parentId?: string }
   | { type: 'set-tag-parent'; tagId: string; parentId?: string }
   | { type: 'get-migration-backup'; ledgerId: string }
   | { type: 'delete-tag'; tagId: string; children?: TagChildDisposition }

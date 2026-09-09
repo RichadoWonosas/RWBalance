@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
 
-import { addAccount, addTag, addTransactionsWithTags, correctTransaction, createLedger, deleteAccount, deleteTag, effectiveTransaction, isTransactionDeleted, normalizeName, projectBalances, resolveAndDeleteTag, restoreAccount, restoreTransaction, reverseTransaction, transactionAuditChain, updateAccount, updateTransactionTags, validateLedgerData, migrateLedgerV1, setTagParent } from '../core/domain/ledger'
+import { addAccount, addTag, addTransactionsWithTags, correctTransaction, createLedger, deleteAccount, deleteTag, effectiveTransaction, isTransactionDeleted, normalizeName, projectBalances, resolveAndDeleteTag, restoreAccount, restoreTransaction, reverseTransaction, transactionAuditChain, updateAccount, updateTag, updateTransactionTags, validateLedgerData, migrateLedgerV1, setTagParent } from '../core/domain/ledger'
 import { currencies, type Currency, type Ledger } from '../core/domain/types'
 import { decryptLedger, encryptLedger, openLedger, parseContainer, rewrapContainer, type EncryptedLedgerContainer, type SecurityAlgorithms } from '../core/security/crypto'
 import { deleteLedger, getMigrationBackup, getContainer, getLedgerRecovery, listLedgerIndexes, restoreLedgerRecovery, saveLedger, type LedgerIndexEntry } from '../core/data/indexed-db/repository'
@@ -173,6 +173,7 @@ async function handle(command: LedgerWorkerCommand): Promise<LedgerWorkerResult>
     case 'delete-account': return mutate((current) => deleteAccount(current, command.accountId))
     case 'restore-account': return mutate((current) => restoreAccount(current, command.accountId))
     case 'add-tag': return mutate((current) => addTag(current, command.name, command.parentId))
+    case 'update-tag': return mutate(current => { updateTag(current, command.tagId, command.name, command.parentId) })
     case 'set-tag-parent': return mutate(current => setTagParent(current, command.tagId, command.parentId))
     case 'delete-tag': return mutate((current) => deleteTag(current, command.tagId, command.children))
     case 'resolve-delete-tag': return mutate((current) => resolveAndDeleteTag(current, command.tagId, command.resolutions, command.children))
