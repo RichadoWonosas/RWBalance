@@ -352,6 +352,7 @@ const tagName = ref('')
 const tagParentId = ref('')
 const parentEdit = reactive({ tagId: '', name: '', parentId: '', confirmed: false })
 const tagSearch = ref('')
+const tagSearchActive = computed(() => Boolean(normalizeSearch(tagSearch.value)))
 const expandedTagIds = ref<string[]>([])
 watch(() => ledger.value?.id, () => { expandedTagIds.value = [] })
 function expandTagPath(id?: string) {
@@ -369,17 +370,17 @@ const tagTreeRows = computed(() => {
       for (const id of expandTagAncestors(ledger.value.tags, [row.tag.id])) searched.add(id)
     }
   }
-  return all.filter(row => {
-    if (searched && !searched.has(row.tag.id)) return false
-    if (query) return true
+  return all.map(row => {
+    let visible = !searched || searched.has(row.tag.id)
     let parentId = row.tag.parentId
-    while (parentId) {
-      if (!expandedTagIds.value.includes(parentId)) return false
+    while (visible && !query && parentId) {
+      if (!expandedTagIds.value.includes(parentId)) visible = false
       parentId = ledger.value!.tags.find(tag => tag.id === parentId)?.parentId
     }
-    return true
+    return { ...row, visible }
   })
 })
+const hasVisibleTagTreeRows = computed(() => tagTreeRows.value.some(row => row.visible))
 function toggleTagBranch(id: string) {
   expandedTagIds.value = expandedTagIds.value.includes(id) ? expandedTagIds.value.filter(value => value !== id) : [...expandedTagIds.value, id]
 }
@@ -896,8 +897,8 @@ function toggleColorTone(event: Event) {
           <div class="section-title"><div><span class="eyebrow">CATEGORIES</span><h3>标注钱花去了哪里</h3></div></div>
           <div class="inline-form tag-create-form"><input name="tag-name" v-model="tagName" placeholder="输入新标签名称" @keyup.enter="createTag" /><select name="tag-parent-id" aria-label="新标签的父标签" v-model="tagParentId"><option value="">根标签（无父级）</option><option v-for="tag in ledger?.tags" :key="tag.id" :value="tag.id">{{ tagNameOf(tag.id) }}</option></select><button class="primary" :disabled="session.busy" @click="createTag">添加</button></div>
           <label class="search tag-search"><span>⌕</span><input name="tag-search" v-model="tagSearch" placeholder="筛选标签或父级" /></label>
-          <TransitionGroup name="tag-tree" tag="div" class="tag-management-list"><article v-for="row in tagTreeRows" :key="row.tag.id" :style="{ '--tag-depth': row.depth }"><div class="tag-tree-main"><button v-if="row.hasChildren" type="button" class="tag-tree-toggle" :class="{ expanded: expandedTagIds.includes(row.tag.id) || Boolean(tagSearch) }" :aria-label="`${expandedTagIds.includes(row.tag.id) ? '折叠' : '展开'} ${row.tag.name} 的子标签`" :aria-expanded="expandedTagIds.includes(row.tag.id) || Boolean(tagSearch)" @click="toggleTagBranch(row.tag.id)"><span>›</span></button><span v-else class="tag-tree-spacer"></span><span class="tag-path">{{ row.tag.name }}</span></div><div class="actions"><button class="ghost small" :aria-label="'修改标签 ' + row.tag.name" @click="openTagEdit(row.tag.id)">修改</button><button class="ghost small danger-text" :aria-label="'删除标签 ' + row.tag.name" @click="openTagDelete(row.tag.id)">删除</button></div></article></TransitionGroup>
-          <div v-if="!tagTreeRows.length" class="empty compact">没有符合筛选条件的标签</div>
+          <div class="tag-management-list"><div v-for="row in tagTreeRows" :key="row.tag.id" class="tag-tree-collapse" :class="{ open: row.visible }" :inert="!row.visible"><div class="tag-tree-collapse-content"><article :style="{ '--tag-depth': row.depth }"><div class="tag-tree-main"><button v-if="row.hasChildren" type="button" class="tag-tree-toggle" :class="{ expanded: expandedTagIds.includes(row.tag.id) || tagSearchActive }" :aria-label="`${expandedTagIds.includes(row.tag.id) ? '折叠' : '展开'} ${row.tag.name} 的子标签`" :aria-expanded="expandedTagIds.includes(row.tag.id) || tagSearchActive" @click="toggleTagBranch(row.tag.id)"><span>›</span></button><span v-else class="tag-tree-spacer"></span><span class="tag-path">{{ row.tag.name }}</span></div><div class="actions"><button class="ghost small" :aria-label="'修改标签 ' + row.tag.name" @click="openTagEdit(row.tag.id)">修改</button><button class="ghost small danger-text" :aria-label="'删除标签 ' + row.tag.name" @click="openTagDelete(row.tag.id)">删除</button></div></article></div></div></div>
+          <div v-if="!hasVisibleTagTreeRows" class="empty compact">没有符合筛选条件的标签</div>
           <details v-if="ledger?.hierarchyChanges.length" class="hierarchy-history"><summary>层级变更记录（{{ ledger.hierarchyChanges.length }}）</summary><ol><li v-for="(change, index) in [...ledger.hierarchyChanges].reverse()" :key="index">{{ new Date(change.changedAt).toLocaleString('zh-CN') }} · {{ tagNameOf(change.tagId) }} · {{ change.action === 'delete' ? '删除标签' : parentNameOf(change.previousParentId) + ' → ' + parentNameOf(change.parentId) }} · 影响 {{ change.affectedTransactions }} 条记录</li></ol></details>
         </section>
       </template>
