@@ -37,6 +37,7 @@ test('login and repeated page navigation have named fields and no uncaught error
   await page.locator('.tone-switch').click()
   await expect(toneSwitch).toBeChecked()
   await expect(toneSwitch).toBeEnabled()
+  await expect(page.locator('.theme-entry .disclosure-triangle')).toHaveCSS('background-color', /rgb\(153, 17[89], 255\)/)
   await page.getByRole('button', { name: /暂离/ }).click()
   await expect(page.getByRole('heading', { name: '选择一个账本' })).toBeVisible()
   await page.reload()

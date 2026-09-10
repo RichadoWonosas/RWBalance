@@ -29,7 +29,7 @@ function choose(accountId: string) {
   <div class="account-picker">
     <button class="account-picker-trigger" type="button" :aria-expanded="open" @click="open = !open">
       <span :class="{ placeholder: !selectedAccount }">{{ selectedAccount?.name || placeholder }}</span>
-      <b aria-hidden="true">⌄</b>
+      <span class="disclosure-triangle" :class="{ expanded: open }" aria-hidden="true"></span>
     </button>
     <PickerDialog :open="open" :title="placeholder" @close="open = false">
       <div class="collapse-content">
