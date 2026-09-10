@@ -1,5 +1,21 @@
 import { expect, test } from '@playwright/test'
 
+test('search icons are vector shapes centered against their inputs', async ({ page }) => {
+  await page.goto('/')
+  const searchIconGeometry = await page.locator('.search').first().evaluate((search) => {
+    const icon = search.querySelector<HTMLElement>('.search-icon')!
+    const input = search.querySelector<HTMLInputElement>('input')!
+    const iconRect = icon.getBoundingClientRect()
+    const inputRect = input.getBoundingClientRect()
+    return {
+      centerDelta: Math.abs((iconRect.top + iconRect.height / 2) - (inputRect.top + inputRect.height / 2)),
+      iconText: icon.textContent,
+    }
+  })
+  expect(searchIconGeometry.centerDelta).toBeLessThan(1)
+  expect(searchIconGeometry.iconText).toBe('')
+})
+
 test('login and repeated page navigation have named fields and no uncaught errors', async ({ page, browserName }) => {
   const errors: string[] = []
   const issues: string[] = []
