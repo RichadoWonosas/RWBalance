@@ -98,7 +98,7 @@ button, input, select, textarea { font: inherit; }
 button { cursor: pointer; transition:color .18s ease,background-color .18s ease,border-color .18s ease,box-shadow .18s ease,transform .14s ease,filter .18s ease,opacity .18s ease; }
 button:active:not(:disabled) { transform:translateY(1px) scale(.99); }
 button:disabled { opacity: .55; cursor: wait; }
-.disclosure-triangle { display:inline-block; width:.64rem; height:.5rem; flex:0 0 auto; background:var(--color-disclosure-icon); clip-path:polygon(0 0,100% 0,50% 100%); transform-origin:center; transition:background-color .22s ease,transform .22s cubic-bezier(.2,.8,.2,1); }
+.disclosure-triangle { display:block; align-self:center; justify-self:center; width:.64rem; height:.5rem; flex:0 0 auto; margin-block:auto; vertical-align:middle; background:var(--color-disclosure-icon); clip-path:polygon(0 0,100% 0,50% 100%); transform-origin:center; transition:background-color .22s ease,transform .22s cubic-bezier(.2,.8,.2,1); }
 .disclosure-triangle.expanded { transform:rotate(180deg); }
 .disclosure-triangle.side { transform:rotate(-90deg); }
 input, select, textarea { width: 100%; border: 1px solid var(--color-border); background: var(--color-control-background); color: var(--color-text-primary); border-radius: 9px; padding: .72rem .8rem; outline: none; transition:color .18s ease,background-color .22s ease,border-color .18s ease,box-shadow .18s ease,transform .16s ease,opacity .18s ease; }
@@ -270,9 +270,9 @@ nav button.active span { color:var(--color-text-on-primary); transform:scale(1.1
 .tag-tree-collapse article.expandable { cursor:pointer; }
 .tag-tree-collapse article.expandable:hover { border-color:var(--color-secondary); background:var(--color-secondary-subtle); box-shadow:0 4px 12px var(--color-shadow-soft); }
 .tag-tree-main { display:flex; align-items:center; min-width:0; gap:.45rem; padding-left:calc(var(--tag-depth, 0) * 1.15rem); transition:padding-left .2s ease; }
-.tag-tree-toggle,.tag-tree-spacer { width:1.8rem; height:1.8rem; flex:0 0 1.8rem; }
-.tag-tree-toggle { display:grid; place-items:center; border:0; border-radius:7px; background:var(--color-primary-subtle); transition:background-color .18s ease,transform .18s ease; }
-.tag-tree-toggle:hover { transform:scale(1.06); }
+.tag-tree-toggle,.tag-tree-spacer { width:1rem; height:1.8rem; flex:0 0 1rem; }
+.tag-tree-toggle { display:grid; place-items:center; padding:0; border:0; border-radius:0; background:hsl(0 0% 0% / 0%); }
+.tag-tree-toggle:hover { transform:none; }
 .tag-tree-toggle:disabled { cursor:default; opacity:1; }
 .tag-path { min-width:0; overflow-wrap:anywhere; }
 .tag-management-list .actions { flex-shrink:0; margin:0; }
@@ -519,7 +519,7 @@ th,td { padding:.45rem; border-bottom:1px solid var(--color-border); text-align:
 }
 .inline-form>input { min-width:0; flex:1; }
 .inline-form>button { flex-shrink:0; white-space:nowrap; }
-.advanced-trigger { display:flex; justify-content:space-between; margin:.8rem 0; }
+.advanced-trigger { display:flex; align-items:center; justify-content:space-between; margin:.8rem 0; }
 .picker-backdrop { z-index:160; }
 .picker-dialog { width:min(540px,100%); }
 .picker-dialog .tag-cloud { max-height:40vh; overflow:auto; padding:.25rem; }
@@ -566,7 +566,7 @@ option { background:var(--color-control-background); color:var(--color-text-prim
   @starting-style { select:open::picker(select) { opacity:0; transform:translateY(-6px); } }
   option { padding:.55rem .7rem; border-radius:6px; transition:background-color .18s ease; }
   option:hover,option:checked { background:var(--color-secondary-subtle); }
-  select::picker-icon { content:''; width:.64rem; height:.5rem; background:var(--color-disclosure-icon); clip-path:polygon(0 0,100% 0,50% 100%); transition:background-color .22s ease,rotate .18s ease; }
+  select::picker-icon { content:''; display:block; align-self:center; width:.64rem; height:.5rem; margin-block:auto; background:var(--color-disclosure-icon); clip-path:polygon(0 0,100% 0,50% 100%); transform-origin:center; transition:background-color .22s ease,rotate .18s ease; }
   select:open::picker-icon { rotate:180deg; }
 }
 @media (prefers-reduced-motion:reduce) {

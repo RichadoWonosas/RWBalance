@@ -45,6 +45,8 @@ test('nested tag management, implicit selections, edit/correction and non-overla
   await expect(page.locator('.tag-management-list article')).toHaveCount(8)
   await expect(page.locator('.tag-tree-collapse.open article')).toHaveCount(5)
   await expect(page.locator('.tag-tree-toggle .disclosure-triangle')).toHaveCount(2)
+  await expect(page.locator('.tag-tree-toggle').first()).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
+  await expect(page.locator('.tag-tree-toggle').first()).toHaveCSS('border-radius', '0px')
   await page.locator('.tag-tree-collapse.open article').filter({ hasText: '娱乐' }).click()
   await expect(page.locator('.tag-tree-collapse.open article')).toHaveCount(7)
   await expect(page.locator('.tag-tree-collapse:not(.open) .tag-path', { hasText: '游戏内购买' })).toBeHidden()
