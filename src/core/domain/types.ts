@@ -53,6 +53,8 @@ export interface Transaction {
   commitRevision?: number
   commitIndex?: number
   updatedRevision?: number
+  /** Stable order for records whose modification timestamps are identical. */
+  updatedOrder?: number
   createdAt: string
   updatedAt: string
   recordRole: RecordRole
@@ -92,6 +94,10 @@ export interface TransactionDraft {
   note?: string
   bookedAt: string
   occurredAt: string
+  /** Time when this draft entered the pending queue. */
+  stagedAt?: string
+  /** UI-only stable identity while the draft is pending. */
+  queueId?: string
 }
 
 export type BalanceMap = Record<string, Partial<Record<Currency, number>>>

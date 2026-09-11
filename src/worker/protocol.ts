@@ -49,6 +49,7 @@ export type LedgerWorkerCommand =
   | { type: 'restore-transaction'; transactionId: string }
   | { type: 'update-transaction-tags'; transactionId: string; selectedTagIds: string[]; primaryTagId: string }
   | { type: 'correct-transaction'; transactionId: string; draft: TransactionDraft }
+  | { type: 'reorder-transaction-updates'; orderedGroups: string[][] }
   | { type: 'set-appearance'; appearance: AppearanceSettings }
   | { type: 'set-auto-lock'; seconds: number }
   | { type: 'change-passphrase'; oldSecret: string; newSecret: string }

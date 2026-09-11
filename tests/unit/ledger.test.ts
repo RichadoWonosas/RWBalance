@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { addAccount, addTag, addTransactions, addTransactionsWithTags, correctTransaction, createLedger, defaultTagNames, deleteAccount, effectiveTransaction, isTransactionDeleted, migrateLedgerToV3, normalizeName, occurrenceMigrationEntries, projectBalances, resolveAndDeleteTag, restoreAccount, restoreTransaction, reverseTransaction, transactionAuditChain, updateAccount, updateTransactionTags, validateLedgerData } from '../../src/core/domain/ledger'
+import { addAccount, addTag, addTransactions, addTransactionsWithTags, correctTransaction, createLedger, defaultTagNames, deleteAccount, effectiveTransaction, isTransactionDeleted, migrateLedgerToV3, normalizeName, occurrenceMigrationEntries, projectBalances, reorderTransactionUpdates, resolveAndDeleteTag, restoreAccount, restoreTransaction, reverseTransaction, transactionAuditChain, updateAccount, updateTransactionTags, validateLedgerData } from '../../src/core/domain/ledger'
 import { decodeAppearance, encodeAppearance, normalizeHue, profileForHue } from '../../src/core/domain/theme'
 import { currencyRules, toMinorUnits } from '../../src/core/domain/money'
 
@@ -106,22 +106,40 @@ describe('ledger domain', () => {
     expect(ledger.transactions).toHaveLength(before)
   })
 
-  it('persists one stable revision and the visible order for an atomic batch', () => {
+  it('uses each draft staging time as its initial modification time', () => {
     const ledger = createLedger('批量顺序')
     const account = addAccount(ledger, '现金', false, { CNY: 1_000 })
     const tag = ledger.tags[0]!
+    const stagedAt = ['2026-09-12T01:00:00.100Z', '2026-09-12T01:00:00.200Z', '2026-09-12T01:00:00.300Z']
     const drafts = ['20:00:00', '19:00:00', '18:00:00'].map((time, index) => ({
       kind: 'expense' as const,
       sourceAccountId: account.id,
       sourceMoney: { currency: 'CNY' as const, minorUnits: index + 1 },
       selectedTagIds: [tag.id], primaryTagId: tag.id, note: `顺序 ${index + 1}`,
-      bookedAt: '2026-09-11', occurredAt: `2026-09-11T${time}+08:00`,
+      bookedAt: '2026-09-11', occurredAt: `2026-09-11T${time}+08:00`, stagedAt: stagedAt[index],
     }))
     const transactions = addTransactions(ledger, drafts)
-    expect(new Set(transactions.map((transaction) => transaction.createdAt))).toHaveLength(1)
+    expect(transactions.map((transaction) => transaction.createdAt)).toEqual(stagedAt)
+    expect(transactions.map((transaction) => transaction.updatedAt)).toEqual(stagedAt)
     expect(new Set(transactions.map((transaction) => transaction.commitRevision))).toHaveLength(1)
     expect(transactions.map((transaction) => transaction.commitIndex)).toEqual([0, 1, 2])
     expect(transactions.map((transaction) => transaction.occurredAt)).toEqual(drafts.map((draft) => draft.occurredAt))
+    validateLedgerData(ledger)
+  })
+
+  it('reorders a complete same-second modification group by exchanging timestamp slots', () => {
+    const ledger = createLedger('同秒顺序')
+    const account = addAccount(ledger, '现金', false, { CNY: 1_000 })
+    const tag = ledger.tags[0]!
+    const base = { kind: 'expense' as const, sourceAccountId: account.id, sourceMoney: { currency: 'CNY' as const, minorUnits: 1 }, selectedTagIds: [tag.id], primaryTagId: tag.id, bookedAt: '2026-09-11', occurredAt: '2026-09-11T12:00:00+08:00' }
+    const [first, second] = addTransactions(ledger, [
+      { ...base, note: '先暂存', stagedAt: '2026-09-12T01:02:03.100Z' },
+      { ...base, note: '后暂存', stagedAt: '2026-09-12T01:02:03.900Z' },
+    ])
+    reorderTransactionUpdates(ledger, [[first!.id, second!.id]])
+    expect([first!.updatedAt, second!.updatedAt]).toEqual(['2026-09-12T01:02:03.900Z', '2026-09-12T01:02:03.100Z'])
+    expect([first!.updatedOrder, second!.updatedOrder]).toEqual([0, 1])
+    expect(() => reorderTransactionUpdates(ledger, [[first!.id]])).toThrow('顺序调整数据无效')
     validateLedgerData(ledger)
   })
 

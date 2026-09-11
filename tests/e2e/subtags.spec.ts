@@ -115,6 +115,7 @@ test('nested tag management, implicit selections, edit/correction and non-overla
   await page.locator('[name="correction-form-source-amount"]').fill('12')
   await page.getByRole('button', { name: '保存更正' }).click()
   await expect(page.locator('.modal')).toHaveCount(0)
+  await page.getByRole('button', { name: /^筛选/ }).click()
   await page.locator('[name="transaction-filters-tag-id"]').selectOption({ label: '娱乐' })
   await expect(page.locator('.transaction-list article')).toHaveCount(1)
   await page.locator('[name="transaction-filters-tag-mode"]').selectOption('direct')

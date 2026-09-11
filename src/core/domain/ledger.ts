@@ -81,6 +81,7 @@ export function validateLedgerData(value: unknown): asserts value is Ledger {
       if (!Number.isSafeInteger(transaction.commitRevision) || transaction.commitRevision! < 1 || transaction.commitRevision! >= ledger.nextTransactionRevision! ||
         !Number.isSafeInteger(transaction.updatedRevision) || transaction.updatedRevision! < transaction.commitRevision! || transaction.updatedRevision! >= ledger.nextTransactionRevision! ||
         !Number.isSafeInteger(transaction.commitIndex) || transaction.commitIndex! < 0) throw new Error('账目提交顺序无效')
+      if (transaction.updatedOrder !== undefined && (!Number.isSafeInteger(transaction.updatedOrder) || transaction.updatedOrder < 0)) throw new Error('账目同时刻顺序无效')
       const position = `${transaction.commitRevision}:${transaction.commitIndex}`
       if (commitPositions.has(position)) throw new Error('账目提交顺序重复')
       commitPositions.add(position)
@@ -164,13 +165,15 @@ function transactionFromDraft(draft: TransactionDraft, role: Transaction['record
       validateActiveAccount(ledger, draft.destinationAccountId, '收入账户')
     }
   }
+  const recordTimestamp = role === 'normal' && draft.stagedAt ? draft.stagedAt : timestamp
+  if (!Number.isFinite(Date.parse(recordTimestamp))) throw new Error('账目暂存时间无效')
   return {
     id: id(), kind: draft.kind, sourceAccountId: draft.sourceAccountId, sourceMoney: draft.sourceMoney,
     destinationAccountId: draft.destinationAccountId, destinationMoney: draft.destinationMoney,
     explicitTagIds: draft.kind === 'expense' ? [...new Set(draft.selectedTagIds ?? [])] : [],
     selectedTagIds: draft.kind === 'expense' ? (ledger ? expandTransactionTags(ledger.tags, draft.selectedTagIds ?? []) : [...new Set(draft.selectedTagIds ?? [])]) : [],
     primaryTagId: draft.kind === 'expense' ? draft.primaryTagId : undefined,
-    note: draft.note?.trim() ?? '', bookedAt: draft.bookedAt, occurredAt: draft.occurredAt, timePrecision: 'second', createdAt: timestamp, updatedAt: timestamp,
+    note: draft.note?.trim() ?? '', bookedAt: draft.bookedAt, occurredAt: draft.occurredAt, timePrecision: 'second', createdAt: recordTimestamp, updatedAt: recordTimestamp,
     recordRole: role, operationGroupId: groupId,
   }
 }
@@ -182,14 +185,13 @@ function nextTransactionRevision(ledger: Ledger): number {
   return revision
 }
 
-function stampTransactionBatch(ledger: Ledger, transactions: Transaction[], timestamp: string): void {
+function stampTransactionBatch(ledger: Ledger, transactions: Transaction[], _timestamp: string): void {
   const revision = nextTransactionRevision(ledger)
   transactions.forEach((transaction, index) => {
-    transaction.createdAt = timestamp
-    transaction.updatedAt = timestamp
     transaction.commitRevision = revision
     transaction.commitIndex = index
     transaction.updatedRevision = revision
+    transaction.updatedOrder = index
   })
 }
 
@@ -415,6 +417,7 @@ export function migrateLedgerToV3(value: Ledger, occurredAtByTransactionId: Reco
     transaction.commitRevision = revision
     transaction.commitIndex = groupIndex++
     transaction.updatedRevision = revision
+    transaction.updatedOrder = candidate.transactions.indexOf(transaction)
   }
   candidate.schemaVersion = 3
   candidate.nextTransactionRevision = revision + 1
@@ -595,6 +598,31 @@ export function effectiveTransaction(ledger: Ledger, rootId: string): Transactio
   return [...ledger.transactions].reverse().find((item) => item.recordRole === 'replacement' && item.targetTransactionId === rootId) ?? root
 }
 
+/** Reorders complete same-second modification groups without changing their money or audit chains. */
+export function reorderTransactionUpdates(ledger: Ledger, orderedGroups: string[][]): void {
+  if (!orderedGroups.length) throw new Error('没有需要调整的同秒账目')
+  const effective = ledger.transactions
+    .filter((transaction) => transaction.recordRole === 'normal')
+    .map((transaction) => effectiveTransaction(ledger, transaction.id)!)
+  const seen = new Set<string>()
+  for (const orderedIds of orderedGroups) {
+    if (orderedIds.length < 2 || new Set(orderedIds).size !== orderedIds.length || orderedIds.some((transactionId) => seen.has(transactionId))) throw new Error('账目顺序调整数据无效')
+    const rows = orderedIds.map((transactionId) => effective.find((transaction) => transaction.id === transactionId))
+    if (rows.some((transaction) => !transaction)) throw new Error('顺序调整包含无效账目')
+    const second = rows[0]!.updatedAt.slice(0, 19)
+    if (rows.some((transaction) => transaction!.updatedAt.slice(0, 19) !== second)) throw new Error('只能调整修改时间在同一秒内的账目')
+    const completeGroup = effective.filter((transaction) => transaction.updatedAt.slice(0, 19) === second)
+    if (completeGroup.length !== rows.length || completeGroup.some((transaction) => !orderedIds.includes(transaction.id))) throw new Error('必须一次调整完整的同秒账目组')
+    const timestampSlots = rows.map((transaction) => transaction!.updatedAt).sort((a, b) => b.localeCompare(a))
+    rows.forEach((transaction, index) => {
+      transaction!.updatedAt = timestampSlots[index]!
+      transaction!.updatedOrder = index
+      seen.add(transaction!.id)
+    })
+  }
+  ledger.updatedAt = now()
+}
+
 export function transactionAuditChain(ledger: Ledger, transactionId: string): Transaction[] {
   const root = rootTransaction(ledger, transactionId)
   if (!root) return []
@@ -616,6 +644,7 @@ export function updateTransactionTags(ledger: Ledger, transactionId: string, sel
   target.primaryTagId = primaryTagId
   target.updatedAt = now()
   target.updatedRevision = nextTransactionRevision(ledger)
+  target.updatedOrder = 0
   ledger.updatedAt = target.updatedAt
 }
 

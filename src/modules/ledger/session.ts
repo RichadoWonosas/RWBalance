@@ -114,6 +114,7 @@ export const useLedgerStore = defineStore('ledger-session', () => {
   async function restoreTransaction(transactionId: string) { return run({ type: 'restore-transaction', transactionId }) }
   async function updateTransactionTags(transactionId: string, selectedTagIds: string[], primaryTagId: string) { return run({ type: 'update-transaction-tags', transactionId, selectedTagIds, primaryTagId }) }
   async function correctTransaction(transactionId: string, draft: TransactionDraft) { return run({ type: 'correct-transaction', transactionId, draft }) }
+  async function reorderTransactionUpdates(orderedGroups: string[][]) { return run({ type: 'reorder-transaction-updates', orderedGroups }) }
   async function setAppearance(appearance: AppearanceSettings) { return run({ type: 'set-appearance', appearance }) }
   async function setAutoLockSeconds(seconds: number) { return run({ type: 'set-auto-lock', seconds }) }
   async function exportById(ledgerId: string) {
@@ -139,7 +140,7 @@ export const useLedgerStore = defineStore('ledger-session', () => {
     ledger, indexes, busy, error, isUnlocked, migration, confirmMigration, exportMigrationPreview, exportMigrationBackup, setTagParent,
     initialize, refreshIndexes, create, unlock, lock, terminateSession, remove, rename,
     addAccount, updateAccount, deleteAccount, restoreAccount, addTag, updateTag, deleteTag, resolveDeleteTag, addTransactions,
-    reverseTransaction, restoreTransaction, updateTransactionTags, correctTransaction, setAppearance, setAutoLockSeconds, exportById, exportCurrent,
+    reverseTransaction, restoreTransaction, updateTransactionTags, correctTransaction, reorderTransactionUpdates, setAppearance, setAutoLockSeconds, exportById, exportCurrent,
     inspectImportFile, importFile, changePassphrase, migrateSecurity, restoreRecovery,
   }
 })

@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
 
-import { addAccount, addTag, addTransactionsWithTags, correctTransaction, createLedger, deleteAccount, deleteTag, effectiveTransaction, isTransactionDeleted, normalizeName, occurrenceMigrationEntries, projectBalances, resolveAndDeleteTag, restoreAccount, restoreTransaction, reverseTransaction, transactionAuditChain, updateAccount, updateTag, updateTransactionTags, validateLedgerData, migrateLedgerToV3, migrateLedgerV1, setTagParent } from '../core/domain/ledger'
-import { currencies, type Currency, type Ledger } from '../core/domain/types'
+import { addAccount, addTag, addTransactionsWithTags, correctTransaction, createLedger, deleteAccount, deleteTag, effectiveTransaction, isTransactionDeleted, normalizeName, occurrenceMigrationEntries, projectBalances, reorderTransactionUpdates, resolveAndDeleteTag, restoreAccount, restoreTransaction, reverseTransaction, transactionAuditChain, updateAccount, updateTag, updateTransactionTags, validateLedgerData, migrateLedgerToV3, migrateLedgerV1, setTagParent } from '../core/domain/ledger'
+import { currencies, type Currency, type Ledger, type Transaction } from '../core/domain/types'
 import { transactionStatisticalFlows } from '../core/domain/statistics'
 import { decryptLedger, encryptLedger, openLedger, parseContainer, rewrapContainer, type EncryptedLedgerContainer, type SecurityAlgorithms } from '../core/security/crypto'
 import { deleteLedger, getMigrationBackup, getContainer, getLedgerRecovery, listLedgerIndexes, restoreLedgerRecovery, saveLedger, type LedgerIndexEntry } from '../core/data/indexed-db/repository'
@@ -40,11 +40,11 @@ function createView(current: Ledger): LedgerView {
   const normalTransactions = roots
     .filter((transaction) => !isTransactionDeleted(current, transaction.id))
     .map((transaction) => effectiveTransaction(current, transaction.id)!)
-    .sort((a, b) => (b.updatedRevision ?? 0) - (a.updatedRevision ?? 0) || b.updatedAt.localeCompare(a.updatedAt) || (a.commitIndex ?? 0) - (b.commitIndex ?? 0))
+    .sort(compareModificationDesc)
   const deletedTransactions = roots
     .filter((transaction) => isTransactionDeleted(current, transaction.id))
     .map((transaction) => effectiveTransaction(current, transaction.id)!)
-    .sort((a, b) => (b.updatedRevision ?? 0) - (a.updatedRevision ?? 0) || b.updatedAt.localeCompare(a.updatedAt) || (a.commitIndex ?? 0) - (b.commitIndex ?? 0))
+    .sort(compareModificationDesc)
   const totals = Object.fromEntries(currencies.map((currency) => [currency, { income: 0, expense: 0 }])) as LedgerView['totals']
   const cutoff = new Date()
   cutoff.setHours(0, 0, 0, 0)
@@ -82,6 +82,10 @@ function createView(current: Ledger): LedgerView {
     auditChains: Object.fromEntries(roots.map((root) => [root.id, structuredClone(transactionAuditChain(current, root.id))])),
     tagStats: { primary: rank(primaryTotals), included: rank(includedTotals) },
   }
+}
+
+function compareModificationDesc(a: Transaction, b: Transaction) {
+  return b.updatedAt.localeCompare(a.updatedAt) || (a.updatedOrder ?? a.commitIndex ?? 0) - (b.updatedOrder ?? b.commitIndex ?? 0) || (b.updatedRevision ?? 0) - (a.updatedRevision ?? 0)
 }
 
 async function persistLedger(current: Ledger): Promise<void> {
@@ -184,6 +188,7 @@ async function handle(command: LedgerWorkerCommand): Promise<LedgerWorkerResult>
     case 'restore-transaction': return mutate((current) => { restoreTransaction(current, command.transactionId) })
     case 'update-transaction-tags': return mutate((current) => { updateTransactionTags(current, command.transactionId, command.selectedTagIds, command.primaryTagId) })
     case 'correct-transaction': return mutate((current) => { correctTransaction(current, command.transactionId, command.draft) })
+    case 'reorder-transaction-updates': return mutate((current) => { reorderTransactionUpdates(current, command.orderedGroups) })
     case 'set-appearance': return mutate((current) => {
       current.settings = { ...current.settings, ...command.appearance }
       current.updatedAt = new Date().toISOString()
