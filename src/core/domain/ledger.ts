@@ -44,7 +44,7 @@ export function validateLedgerData(value: unknown): asserts value is Ledger {
     const normalized = normalizeName(account.name); if (normalizedAccounts.has(normalized) && !account.deletedAt) throw new Error('存在重复的有效账户名称'); if (!account.deletedAt) normalizedAccounts.add(normalized)
   }
   for (const tag of ledger.tags) {
-    if (tag.id === '__system__') throw new Error('系统标记不能用作用户标签')
+    if (tag.id.startsWith('__')) throw new Error('系统标记不能用作用户标签')
     const normalized = typeof tag.name === 'string' ? normalizeName(tag.name) : ''
     if (!normalized || tag.normalizedName !== normalized || normalizedTags.has(normalized)) throw new Error('标签名称无效或重复')
     normalizedTags.add(normalized)

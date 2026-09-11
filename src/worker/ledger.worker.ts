@@ -2,6 +2,7 @@
 
 import { addAccount, addTag, addTransactionsWithTags, correctTransaction, createLedger, deleteAccount, deleteTag, effectiveTransaction, isTransactionDeleted, normalizeName, projectBalances, resolveAndDeleteTag, restoreAccount, restoreTransaction, reverseTransaction, transactionAuditChain, updateAccount, updateTag, updateTransactionTags, validateLedgerData, migrateLedgerV1, setTagParent } from '../core/domain/ledger'
 import { currencies, type Currency, type Ledger } from '../core/domain/types'
+import { transactionStatisticalFlows } from '../core/domain/statistics'
 import { decryptLedger, encryptLedger, openLedger, parseContainer, rewrapContainer, type EncryptedLedgerContainer, type SecurityAlgorithms } from '../core/security/crypto'
 import { deleteLedger, getMigrationBackup, getContainer, getLedgerRecovery, listLedgerIndexes, restoreLedgerRecovery, saveLedger, type LedgerIndexEntry } from '../core/data/indexed-db/repository'
 import type { LedgerView, LedgerWorkerCommand, LedgerWorkerRequest, LedgerWorkerResponse, LedgerWorkerResult } from './protocol'
@@ -52,13 +53,13 @@ function createView(current: Ledger): LedgerView {
   const includedTotals = Object.fromEntries(currencies.map((currency) => [currency, new Map<string, number>()])) as Record<Currency, Map<string, number>>
   for (const transaction of normalTransactions) {
     if (new Date(transaction.bookedAt) < cutoff) continue
-    if (transaction.kind === 'income' && transaction.destinationMoney) totals[transaction.destinationMoney.currency].income += transaction.destinationMoney.minorUnits
-    if (transaction.kind === 'expense' && transaction.sourceMoney) totals[transaction.sourceMoney.currency].expense += transaction.sourceMoney.minorUnits
-    if (transaction.kind === 'expense' && transaction.sourceMoney) {
-      const currency = transaction.sourceMoney.currency
-      const amount = transaction.sourceMoney.minorUnits
-      if (transaction.primaryTagId) primaryTotals[currency].set(transaction.primaryTagId, (primaryTotals[currency].get(transaction.primaryTagId) ?? 0) + amount)
-      for (const tagId of transaction.selectedTagIds) includedTotals[currency].set(tagId, (includedTotals[currency].get(tagId) ?? 0) + amount)
+    for (const flow of transactionStatisticalFlows(transaction)) {
+      totals[flow.money.currency][flow.kind] += flow.money.minorUnits
+      if (flow.kind !== 'expense') continue
+      const currency = flow.money.currency
+      const amount = flow.money.minorUnits
+      if (flow.primaryTagId) primaryTotals[currency].set(flow.primaryTagId, (primaryTotals[currency].get(flow.primaryTagId) ?? 0) + amount)
+      for (const tagId of flow.tagIds) includedTotals[currency].set(tagId, (includedTotals[currency].get(tagId) ?? 0) + amount)
     }
   }
   const rank = (maps: Record<Currency, Map<string, number>>) => Object.fromEntries(currencies.map((currency) => [currency, [...maps[currency]].map(([tagId, minorUnits]) => ({ tagId, minorUnits })).sort((a, b) => b.minorUnits - a.minorUnits).slice(0, 3)])) as LedgerView['tagStats']['primary']

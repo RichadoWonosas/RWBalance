@@ -1,6 +1,7 @@
 import 'fake-indexeddb/auto'
 import { beforeAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { addAccount, addTransactions, createLedger } from '../../src/core/domain/ledger'
+import { EXCHANGE_PRIMARY_TAG_ID, exchangeExpenseTagId } from '../../src/core/domain/statistics'
 import { decryptLedger, encryptLedger } from '../../src/core/security/crypto'
 import * as repository from '../../src/core/data/indexed-db/repository'
 import type { LedgerWorkerCommand, LedgerWorkerResponse, LedgerWorkerResult } from '../../src/worker/protocol'
@@ -101,5 +102,24 @@ describe('Worker migration and hierarchy trust boundary', () => {
     expect(await repository.getContainer(result.view!.id)).toEqual(container)
     result = await request({ type: 'set-auto-lock', seconds: 300 })
     expect(result.view!.tags.find(tag => tag.id === child.id)?.parentId).toBe(parent.id)
+  })
+  it('includes both sides of currency exchange in totals and derives hidden spending tags', async () => {
+    let result = await request({ type: 'create', name: '换汇统计-' + crypto.randomUUID(), secret: 'test-passphrase' })
+    result = await request({ type: 'add-account', name: '多币种钱包', isPendingSpend: false, initial: { CNY: 100_000, JPY: 0 } })
+    const account = result.view!.accounts[0]!
+    result = await request({ type: 'add-transactions', drafts: [{
+      kind: 'transfer',
+      sourceAccountId: account.id,
+      sourceMoney: { currency: 'CNY', minorUnits: 50_000 },
+      destinationAccountId: account.id,
+      destinationMoney: { currency: 'JPY', minorUnits: 10_000 },
+      bookedAt: new Date().toISOString().slice(0, 10),
+    }] })
+
+    expect(result.view!.totals.CNY.expense).toBe(50_000)
+    expect(result.view!.totals.JPY.income).toBe(10_000)
+    expect(result.view!.tagStats.primary.CNY).toContainEqual({ tagId: EXCHANGE_PRIMARY_TAG_ID, minorUnits: 50_000 })
+    expect(result.view!.tagStats.included.CNY).toContainEqual({ tagId: exchangeExpenseTagId('JPY'), minorUnits: 50_000 })
+    expect(result.view!.tags.some(tag => tag.id.startsWith('__'))).toBe(false)
   })
 })

@@ -2,8 +2,9 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { rootTagId, tagPath } from '../core/domain/tag-hierarchy'
 import { vBackdropDismiss } from '../app/backdrop-dismiss'
-import { currencies, type Currency, type Transaction } from '../core/domain/types'
+import { currencies, type Currency } from '../core/domain/types'
 import { currencyRules, formatMinorUnits } from '../core/domain/money'
+import { implicitTagName, isImplicitTagId, transactionStatisticalFlows } from '../core/domain/statistics'
 import type { LedgerView } from '../worker/protocol'
 
 const props = defineProps<{ ledger: LedgerView; primaryHue: number; secondaryHue: number }>()
@@ -26,12 +27,10 @@ const range = computed(() => {
   return { from: isoDaysAgo(Number(preset.value) - 1), to: today }
 })
 const transactions = computed(() => props.ledger.normalTransactions.filter((tx) => tx.bookedAt >= range.value.from && tx.bookedAt <= range.value.to))
-const amountFor = (tx: Transaction) => tx.kind === 'income' ? tx.destinationMoney : tx.sourceMoney
-const totals = computed(() => Object.fromEntries(currencies.map((currency) => [currency, transactions.value.reduce((sum, tx) => {
-  const money = amountFor(tx)
-  if (money?.currency !== currency) return sum
-  if (tx.kind === 'income') sum.income += money.minorUnits
-  if (tx.kind === 'expense') sum.expense += money.minorUnits
+const flows = computed(() => transactions.value.flatMap(transactionStatisticalFlows))
+const totals = computed(() => Object.fromEntries(currencies.map((currency) => [currency, flows.value.reduce((sum, flow) => {
+  if (flow.money.currency !== currency) return sum
+  sum[flow.kind] += flow.money.minorUnits
   return sum
 }, { income: 0, expense: 0 })])) as Record<Currency, { income: number; expense: number }>)
 const categoryBalances = computed(() => Object.fromEntries(currencies.map((currency) => [currency, props.ledger.accounts.reduce((result, account) => {
@@ -46,27 +45,36 @@ const maxAccountBalance = computed(() => Math.max(1, ...accountBars.value.map((i
 const trend = computed(() => {
   const rows = new Map<string, { date: string; income: number; expense: number }>()
   for (const tx of transactions.value) {
-    const money = amountFor(tx)
-    if (money?.currency !== chartCurrency.value || tx.kind === 'transfer') continue
-    const row = rows.get(tx.bookedAt) ?? { date: tx.bookedAt, income: 0, expense: 0 }
-    row[tx.kind] += money.minorUnits
-    rows.set(tx.bookedAt, row)
+    for (const flow of transactionStatisticalFlows(tx)) {
+      if (flow.money.currency !== chartCurrency.value) continue
+      const row = rows.get(tx.bookedAt) ?? { date: tx.bookedAt, income: 0, expense: 0 }
+      row[flow.kind] += flow.money.minorUnits
+      rows.set(tx.bookedAt, row)
+    }
   }
   return [...rows.values()].sort((a, b) => a.date.localeCompare(b.date))
 })
 const trendMax = computed(() => Math.max(1, ...trend.value.flatMap((row) => [row.income, row.expense])))
-function trendPoints(kind: 'income' | 'expense') { return trend.value.map((row, index) => `${trend.value.length < 2 ? 50 : index / (trend.value.length - 1) * 100},${94 - row[kind] / trendMax.value * 84}`).join(' ') }
+const plotX = (index: number, count: number) => count < 2 ? 57 : 16 + index / (count - 1) * 82
+const trendY = (kind: 'income' | 'expense', value: number) => 88 - value / trendMax.value * 80
+function trendPoints(kind: 'income' | 'expense') { return trend.value.map((row, index) => `${plotX(index, trend.value.length)},${trendY(kind, row[kind])}`).join(' ') }
+function compactAmount(value: number, currency: Currency) {
+  const major = value / 10 ** currencyRules[currency].fractionDigits
+  return new Intl.NumberFormat('zh-CN', { notation: 'compact', maximumFractionDigits: 1 }).format(major)
+}
 const tagTotals = computed(() => {
   const primary = new Map<string, number>(); const included = new Map<string, number>()
   for (const tx of transactions.value) {
-    if (tx.kind !== 'expense' || tx.sourceMoney?.currency !== chartCurrency.value) continue
-    if (tx.primaryTagId) {
-      const id = primaryGrouping.value === 'root' ? rootTagId(props.ledger.tags, tx.primaryTagId) : tx.primaryTagId
-      primary.set(id, (primary.get(id) ?? 0) + tx.sourceMoney.minorUnits)
+    for (const flow of transactionStatisticalFlows(tx)) {
+      if (flow.kind !== 'expense' || flow.money.currency !== chartCurrency.value) continue
+      if (flow.primaryTagId) {
+        const id = primaryGrouping.value === 'root' && !isImplicitTagId(flow.primaryTagId) ? rootTagId(props.ledger.tags, flow.primaryTagId) : flow.primaryTagId
+        primary.set(id, (primary.get(id) ?? 0) + flow.money.minorUnits)
+      }
+      for (const tagId of flow.tagIds) included.set(tagId, (included.get(tagId) ?? 0) + flow.money.minorUnits)
     }
-    for (const tagId of tx.selectedTagIds) included.set(tagId, (included.get(tagId) ?? 0) + tx.sourceMoney.minorUnits)
   }
-  const rank = (map: Map<string, number>) => [...map].map(([tagId, value]) => ({ tagId, name: tagPath(props.ledger.tags, tagId) || '系统标签', value })).sort((a, b) => b.value - a.value)
+  const rank = (map: Map<string, number>) => [...map].map(([tagId, value]) => ({ tagId, name: implicitTagName(tagId) ?? (tagPath(props.ledger.tags, tagId) || '系统标签'), value })).sort((a, b) => b.value - a.value)
   return { primary: rank(primary), included: rank(included) }
 })
 const donutGradient = computed(() => {
@@ -77,13 +85,28 @@ const donutGradient = computed(() => {
 })
 const exchangeRows = computed(() => transactions.value.filter((tx) => tx.kind === 'transfer' && tx.sourceMoney && tx.destinationMoney && tx.sourceMoney.currency !== tx.destinationMoney.currency && tx.sourceMoney.minorUnits > 0).map((tx) => ({
   id: tx.id, date: tx.bookedAt, pair: `${tx.sourceMoney!.currency}/${tx.destinationMoney!.currency}`,
+  expense: tx.sourceMoney!, income: tx.destinationMoney!, primaryLabel: '换汇',
+  expenseLabel: transactionStatisticalFlows(tx).find(flow => flow.kind === 'expense')?.label ?? '换汇支出',
+  incomeLabel: transactionStatisticalFlows(tx).find(flow => flow.kind === 'income')?.label ?? '换汇收入',
   rate: (tx.destinationMoney!.minorUnits / 10 ** currencyRules[tx.destinationMoney!.currency].fractionDigits) / (tx.sourceMoney!.minorUnits / 10 ** currencyRules[tx.sourceMoney!.currency].fractionDigits),
 })).sort((a, b) => a.date.localeCompare(b.date)))
 const exchangePairs = computed(() => [...new Set(exchangeRows.value.map((row) => row.pair))])
 const exchangePair = ref('')
 watch(exchangePairs, (pairs) => { if (!pairs.includes(exchangePair.value)) exchangePair.value = pairs[0] ?? '' }, { immediate: true })
 const selectedExchange = computed(() => exchangeRows.value.filter((row) => row.pair === exchangePair.value))
-const exchangePoints = computed(() => { const rows = selectedExchange.value; const values = rows.map((row) => row.rate); const min = Math.min(...values, 0); const max = Math.max(...values, 1); return rows.map((row, index) => `${rows.length < 2 ? 50 : index / (rows.length - 1) * 100},${94 - (row.rate - min) / Math.max(1e-9, max - min) * 84}`).join(' ') })
+const exchangeBounds = computed(() => {
+  const values = selectedExchange.value.map((row) => row.rate)
+  return { min: Math.min(...values), max: Math.max(...values) }
+})
+const exchangePoints = computed(() => {
+  const rows = selectedExchange.value
+  return rows.map((row, index) => `${plotX(index, rows.length)},${exchangeY(row.rate)}`).join(' ')
+})
+function exchangeY(rate: number) {
+  const spread = exchangeBounds.value.max - exchangeBounds.value.min
+  return spread <= Number.EPSILON ? 48 : 88 - (rate - exchangeBounds.value.min) / spread * 80
+}
+function compactRate(value: number) { return Number.isFinite(value) ? new Intl.NumberFormat('zh-CN', { maximumSignificantDigits: 4 }).format(value) : '—' }
 
 function aliasMap<T extends { id: string }>(items: T[], prefix: string) { return new Map(items.map((item, index) => [item.id, `${prefix} ${index + 1}`])) }
 function relative(value: number, max: number) { return `相对值 ${Math.round(value / Math.max(1, max) * 100)}%` }
@@ -133,10 +156,10 @@ async function savePng() { await drawReport(); reportCanvas.value?.toBlob((blob)
   </div>
   <section class="surface"><div class="section-title"><div><span class="eyebrow">ACCOUNT BALANCES</span><h3>总体余额</h3></div><select name="chart-currency" aria-label="统计币种" v-model="chartCurrency" class="compact-select"><option v-for="currency in currencies" :key="currency">{{ currency }}</option></select></div><div class="bar-chart"><button v-for="row in accountBars" :key="row.account.id" @click="emit('drill',{ accountId:row.account.id,currency:chartCurrency })"><span>{{ row.account.name }}</span><i :style="{ width:`${row.value / maxAccountBalance * 100}%` }"></i><b>{{ formatMinorUnits(row.value, chartCurrency) }}</b></button></div><details><summary>查看等价数据表</summary><table><tbody><tr v-for="row in accountBars" :key="row.account.id"><th>{{ row.account.name }}</th><td>{{ formatMinorUnits(row.value, chartCurrency) }}</td></tr></tbody></table></details></section>
   <div class="analytics-grid">
-    <section class="surface"><span class="eyebrow">CASH FLOW</span><h3>收支趋势 · {{ chartCurrency }}</h3><svg class="line-chart" viewBox="0 0 100 100" role="img" aria-label="收入与支出趋势图"><polyline class="income-line" :points="trendPoints('income')"/><polyline class="expense-line" :points="trendPoints('expense')"/></svg><div class="chart-legend"><span class="income-dot">收入</span><span class="expense-dot">支出</span></div><details><summary>查看等价数据表</summary><table><thead><tr><th>日期</th><th>收入</th><th>支出</th></tr></thead><tbody><tr v-for="row in trend" :key="row.date"><td>{{ row.date }}</td><td>{{ formatMinorUnits(row.income,chartCurrency) }}</td><td>{{ formatMinorUnits(row.expense,chartCurrency) }}</td></tr></tbody></table></details></section>
+    <section class="surface"><span class="eyebrow">CASH FLOW</span><h3>收支趋势 · {{ chartCurrency }}</h3><svg class="line-chart" viewBox="0 0 100 100" role="img" aria-label="收入与支出趋势图"><g class="chart-axis"><line class="grid" x1="16" y1="48" x2="98" y2="48"/><line x1="16" y1="8" x2="16" y2="88"/><line x1="16" y1="88" x2="98" y2="88"/><text x="14" y="10" text-anchor="end">{{ compactAmount(trendMax, chartCurrency) }}</text><text x="14" y="89" text-anchor="end">0</text><text x="16" y="97">{{ range.from.slice(5) }}</text><text x="98" y="97" text-anchor="end">{{ range.to.slice(5) }}</text></g><polyline class="income-line" :points="trendPoints('income')"/><polyline class="expense-line" :points="trendPoints('expense')"/><circle v-for="(row,index) in trend" :key="`income-${row.date}`" class="data-point income-point" :cx="plotX(index,trend.length)" :cy="trendY('income',row.income)" r="1.35"/><circle v-for="(row,index) in trend" :key="`expense-${row.date}`" class="data-point expense-point" :cx="plotX(index,trend.length)" :cy="trendY('expense',row.expense)" r="1.35"/></svg><div class="chart-legend"><span class="income-dot">收入</span><span class="expense-dot">支出</span></div><details><summary>查看等价数据表</summary><table><thead><tr><th>日期</th><th>收入</th><th>支出</th></tr></thead><tbody><tr v-for="row in trend" :key="row.date"><td>{{ row.date }}</td><td>{{ formatMinorUnits(row.income,chartCurrency) }}</td><td>{{ formatMinorUnits(row.expense,chartCurrency) }}</td></tr></tbody></table></details></section>
     <section class="surface"><span class="eyebrow">PRIMARY TAGS</span><h3>支出类型圆环图 · {{ chartCurrency }}</h3><label>主标签统计口径<select name="primary-grouping" v-model="primaryGrouping"><option value="exact">精确主标签</option><option value="root">按根级祖先汇总</option></select></label><p class="field-help">每笔支出仅计入一个扇区，父子标签不重复计费。</p><div class="donut-layout"><div class="donut" :style="{ background:donutGradient }"><span>{{ tagTotals.primary.length }} 类</span></div><ol><li v-for="row in tagTotals.primary" :key="row.tagId"><button @click="drillTag(row.tagId, 'primary')">{{ row.name }}</button><b>{{ formatMinorUnits(row.value,chartCurrency) }}</b></li></ol></div><details><summary>查看等价数据表</summary><table><tbody><tr v-for="row in tagTotals.primary" :key="row.tagId"><th>{{ row.name }}</th><td>{{ formatMinorUnits(row.value,chartCurrency) }}</td></tr></tbody></table></details></section>
   </div>
   <div class="analytics-grid"><section v-for="mode in (['primary','included'] as const)" :key="mode" class="surface"><span class="eyebrow">TAG RANKING</span><h3>{{ mode === 'primary' ? (primaryGrouping === 'root' ? '主标签按根级汇总' : '精确主标签支出排行') : '包含子标签支出排行（跨标签不可相加）' }}</h3><ol class="rank-list"><li v-for="row in tagTotals[mode]" :key="row.tagId"><button @click="drillTag(row.tagId, mode)">{{ row.name }}</button><i :style="{ width:`${row.value / Math.max(1,...tagTotals[mode].map(item=>item.value)) * 100}%` }"></i><b>{{ formatMinorUnits(row.value,chartCurrency) }}</b></li><li v-if="!tagTotals[mode].length">暂无支出</li></ol></section></div>
-  <section class="surface"><div class="section-title"><div><span class="eyebrow">EXCHANGE RATE</span><h3>银行换汇隐含汇率</h3></div><select name="exchange-pair" aria-label="换汇币种对" v-model="exchangePair" class="compact-select"><option v-for="pair in exchangePairs" :key="pair">{{ pair }}</option></select></div><svg v-if="selectedExchange.length" class="line-chart exchange" viewBox="0 0 100 100" role="img" :aria-label="`${exchangePair} 隐含汇率趋势图`"><polyline :points="exchangePoints"/></svg><div v-else class="empty compact">所选范围内没有跨币种转移</div><details v-if="selectedExchange.length"><summary>查看等价数据表</summary><table><thead><tr><th>日期</th><th>方向</th><th>隐含汇率</th></tr></thead><tbody><tr v-for="row in selectedExchange" :key="row.id"><td>{{ row.date }}</td><td>{{ row.pair }}</td><td>{{ row.rate.toFixed(8) }}</td></tr></tbody></table></details></section>
+  <section class="surface"><div class="section-title"><div><span class="eyebrow">EXCHANGE RATE</span><h3>银行换汇隐含汇率</h3></div><select name="exchange-pair" aria-label="换汇币种对" v-model="exchangePair" class="compact-select"><option v-for="pair in exchangePairs" :key="pair">{{ pair }}</option></select></div><svg v-if="selectedExchange.length" class="line-chart exchange" viewBox="0 0 100 100" role="img" :aria-label="`${exchangePair} 隐含汇率趋势图`"><g class="chart-axis"><line class="grid" x1="16" y1="48" x2="98" y2="48"/><line x1="16" y1="8" x2="16" y2="88"/><line x1="16" y1="88" x2="98" y2="88"/><text x="14" y="10" text-anchor="end">{{ compactRate(exchangeBounds.max) }}</text><text x="14" y="89" text-anchor="end">{{ compactRate(exchangeBounds.min) }}</text><text x="16" y="97">{{ selectedExchange[0]?.date.slice(5) }}</text><text x="98" y="97" text-anchor="end">{{ selectedExchange.at(-1)?.date.slice(5) }}</text></g><polyline :points="exchangePoints"/><circle v-for="(row,index) in selectedExchange" :key="row.id" class="data-point exchange-point" :cx="plotX(index,selectedExchange.length)" :cy="exchangeY(row.rate)" r="1.35"/></svg><div v-else class="empty compact">所选范围内没有跨币种转移</div><details v-if="selectedExchange.length"><summary>查看换汇资金流与等价数据</summary><table><thead><tr><th>日期</th><th>方向</th><th>支出（隐含标签）</th><th>收入（隐含标签）</th><th>主标签</th><th>隐含汇率</th></tr></thead><tbody><tr v-for="row in selectedExchange" :key="row.id"><td>{{ row.date }}</td><td>{{ row.pair }}</td><td>{{ formatMinorUnits(row.expense.minorUnits, row.expense.currency) }} · {{ row.expenseLabel }}</td><td>{{ formatMinorUnits(row.income.minorUnits, row.income.currency) }} · {{ row.incomeLabel }}</td><td>{{ row.primaryLabel }}</td><td>{{ row.rate.toFixed(8) }}</td></tr></tbody></table></details></section>
   <Transition name="modal-motion"><div v-if="exportOpen" class="modal-backdrop" v-backdrop-dismiss="() => { exportOpen = false }"><section class="modal export-modal"><button class="modal-close" @click="exportOpen=false">×</button><span class="eyebrow">EXPORT PREVIEW</span><h2>统计图片预览</h2><label class="privacy-toggle"><input name="redact-export" v-model="redactExport" type="checkbox" />启用关键信息脱敏（默认）</label><p v-if="!redactExport" class="export-warning">警告：图片将包含真实账本名称、账户、标签、金额和日期。</p><div class="canvas-preview"><canvas ref="reportCanvas"></canvas></div><div class="modal-actions"><button class="ghost" @click="exportOpen=false">取消</button><button class="primary" @click="savePng">保存 PNG</button></div></section></div></Transition>
 </template>
