@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
 
-import { addAccount, addTag, addTransactionsWithTags, correctTransaction, createLedger, deleteAccount, deleteTag, effectiveTransaction, isTransactionDeleted, normalizeName, projectBalances, resolveAndDeleteTag, restoreAccount, restoreTransaction, reverseTransaction, transactionAuditChain, updateAccount, updateTag, updateTransactionTags, validateLedgerData, migrateLedgerV1, setTagParent } from '../core/domain/ledger'
+import { addAccount, addTag, addTransactionsWithTags, correctTransaction, createLedger, deleteAccount, deleteTag, effectiveTransaction, isTransactionDeleted, normalizeName, occurrenceMigrationEntries, projectBalances, resolveAndDeleteTag, restoreAccount, restoreTransaction, reverseTransaction, transactionAuditChain, updateAccount, updateTag, updateTransactionTags, validateLedgerData, migrateLedgerToV3, migrateLedgerV1, setTagParent } from '../core/domain/ledger'
 import { currencies, type Currency, type Ledger } from '../core/domain/types'
 import { transactionStatisticalFlows } from '../core/domain/statistics'
 import { decryptLedger, encryptLedger, openLedger, parseContainer, rewrapContainer, type EncryptedLedgerContainer, type SecurityAlgorithms } from '../core/security/crypto'
@@ -40,11 +40,11 @@ function createView(current: Ledger): LedgerView {
   const normalTransactions = roots
     .filter((transaction) => !isTransactionDeleted(current, transaction.id))
     .map((transaction) => effectiveTransaction(current, transaction.id)!)
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .sort((a, b) => (b.updatedRevision ?? 0) - (a.updatedRevision ?? 0) || b.updatedAt.localeCompare(a.updatedAt) || (a.commitIndex ?? 0) - (b.commitIndex ?? 0))
   const deletedTransactions = roots
     .filter((transaction) => isTransactionDeleted(current, transaction.id))
     .map((transaction) => effectiveTransaction(current, transaction.id)!)
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .sort((a, b) => (b.updatedRevision ?? 0) - (a.updatedRevision ?? 0) || b.updatedAt.localeCompare(a.updatedAt) || (a.commitIndex ?? 0) - (b.commitIndex ?? 0))
   const totals = Object.fromEntries(currencies.map((currency) => [currency, { income: 0, expense: 0 }])) as LedgerView['totals']
   const cutoff = new Date()
   cutoff.setHours(0, 0, 0, 0)
@@ -122,11 +122,12 @@ async function mutate(operation: (current: Ledger) => void): Promise<LedgerWorke
 
 function migrationPreview(current: Ledger, container: EncryptedLedgerContainer): LedgerWorkerResult {
   // Validate the complete migration before even showing confirmation. No write or session data.
-  migrateLedgerV1(current)
-  return { migrationInfo: { name: current.name, tags: current.tags.length, transactions: current.transactions.length }, backupContainer: container, backupName: current.name + '-v1升级前备份' }
+  const candidate = migrateLedgerV1(current)
+  const occurrenceEntries = occurrenceMigrationEntries(candidate)
+  return { migrationInfo: { name: current.name, fromVersion: current.schemaVersion as 1 | 2, tags: current.tags.length, transactions: current.transactions.length, occurrenceEntries }, backupContainer: container, backupName: `${current.name}-v${current.schemaVersion}升级前备份` }
 }
-async function upgradedContainer(current: Ledger, secret: string, security: SecurityAlgorithms) {
-  const upgraded = await encryptLedger(migrateLedgerV1(current), secret, { algorithms: security })
+async function upgradedContainer(current: Ledger, secret: string, security: SecurityAlgorithms, occurredAt: Record<string, string>) {
+  const upgraded = await encryptLedger(migrateLedgerToV3(current, occurredAt), secret, { algorithms: security })
   validateLedgerData((await openLedger(upgraded, secret)).ledger)
   return upgraded
 }
@@ -152,10 +153,10 @@ async function handle(command: LedgerWorkerCommand): Promise<LedgerWorkerResult>
       if (!container) throw new Error('找不到账本数据')
       let opened = await openLedger(container, command.secret)
       validateLedgerData(opened.ledger)
-      if (opened.ledger.schemaVersion === 1) {
+      if (opened.ledger.schemaVersion < 3) {
         if (!command.confirmMigration) return migrationPreview(opened.ledger, container)
         const backup = container
-        container = await upgradedContainer(opened.ledger, command.secret, opened.algorithms)
+        container = await upgradedContainer(opened.ledger, command.secret, opened.algorithms, command.migrationOccurredAt ?? {})
         opened = await openLedger(container, command.secret)
         await saveMigrated(container, opened.ledger, backup)
       }
@@ -231,9 +232,9 @@ async function handle(command: LedgerWorkerCommand): Promise<LedgerWorkerResult>
       let container = recovery.container
       let opened = await openLedger(container, command.secret)
       validateLedgerData(opened.ledger)
-      if (opened.ledger.schemaVersion === 1) {
+      if (opened.ledger.schemaVersion < 3) {
         if (!command.confirmMigration) return migrationPreview(opened.ledger, container)
-        container = await upgradedContainer(opened.ledger, command.secret, opened.algorithms)
+        container = await upgradedContainer(opened.ledger, command.secret, opened.algorithms, command.migrationOccurredAt ?? {})
         opened = await openLedger(container, command.secret)
         await saveMigrated(container, opened.ledger, recovery.container)
         hasMigrationBackup = true
@@ -284,7 +285,7 @@ async function handle(command: LedgerWorkerCommand): Promise<LedgerWorkerResult>
     case 'get-migration-backup': {
       const container = await getMigrationBackup(command.ledgerId)
       if (!container) throw new Error('没有升级前备份')
-      return { container, exportName: '账本-v1升级前备份' }
+      return { container, exportName: '账本-升级前备份' }
     }
     case 'get-container': {
       const container = await getContainer(command.ledgerId)
@@ -304,9 +305,9 @@ async function handle(command: LedgerWorkerCommand): Promise<LedgerWorkerResult>
       const container = parseContainer(command.text)
       const opened = await openLedger(container, command.secret)
       validateLedgerData(opened.ledger)
-      const legacy = opened.ledger.schemaVersion === 1
+      const legacy = opened.ledger.schemaVersion < 3
       if (legacy && !command.confirmMigration) return migrationPreview(opened.ledger, container)
-      const imported = migrateLedgerV1(opened.ledger)
+      const imported = legacy ? migrateLedgerToV3(opened.ledger, command.migrationOccurredAt ?? {}) : opened.ledger
       const entries = await indexes()
       const idConflict = entries.find((entry) => entry.ledgerId === imported.id)
       const nameConflict = entries.find((entry) => entry.normalizedName === normalizeName(imported.name) && entry.ledgerId !== imported.id)
@@ -326,7 +327,7 @@ async function handle(command: LedgerWorkerCommand): Promise<LedgerWorkerResult>
         backupContainer = await getContainer(imported.id)
         backupName = `${idConflict.displayName}-替换前备份`
       }
-      if (legacy && command.mode !== 'copy') target = await upgradedContainer(imported, command.secret, opened.algorithms)
+      if (legacy && command.mode !== 'copy') target = await encryptLedger(imported, command.secret, { algorithms: opened.algorithms })
       validateLedgerData((await openLedger(target, command.secret)).ledger)
       await saveLedger(target, { ledgerId: targetLedger.id, displayName: targetLedger.name, normalizedName: normalizeName(targetLedger.name), containerVersion: target.version, updatedAt: targetLedger.updatedAt }, legacy ? container : undefined)
       return { indexes: await indexes(), backupContainer, backupName }

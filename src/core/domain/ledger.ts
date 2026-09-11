@@ -1,4 +1,4 @@
-import type { Account, BalanceMap, Currency, Ledger, Tag, Transaction, TransactionDraft } from './types'
+import type { Account, BalanceMap, Currency, Ledger, Money, Tag, Transaction, TransactionDraft } from './types'
 import { currencies } from './types'
 import { defaultTheme } from './theme'
 import { assertCanSetParent, expandTagAncestors, validateTagHierarchy } from './tag-hierarchy'
@@ -24,14 +24,19 @@ export function createLedger(name: string): Ledger {
     createdAt: timestamp,
     updatedAt: timestamp,
   }))
-  return { id: id(), name: cleanName, schemaVersion: 2, hierarchyChanges: [], createdAt: timestamp, updatedAt: timestamp, accounts: [], tags, transactions: [], settings: { ...defaultTheme, autoLockSeconds: 300 } }
+  return { id: id(), name: cleanName, schemaVersion: 3, nextTransactionRevision: 1, hierarchyChanges: [], createdAt: timestamp, updatedAt: timestamp, accounts: [], tags, transactions: [], settings: { ...defaultTheme, autoLockSeconds: 300 } }
+}
+
+const occurredAtPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?(?:Z|[+-]\d{2}:\d{2})$/
+function validOccurredAt(value: unknown, bookedAt: string): value is string {
+  return typeof value === 'string' && occurredAtPattern.test(value) && Number.isFinite(Date.parse(value)) && value.slice(0, 10) === bookedAt
 }
 
 /** Strict trust-boundary validation for decrypted/imported data. */
 export function validateLedgerData(value: unknown): asserts value is Ledger {
   if (!value || typeof value !== 'object') throw new Error('账本数据不是有效对象')
   const ledger = value as Ledger
-  if (ledger.schemaVersion !== 1 && ledger.schemaVersion !== 2) throw new Error('不支持此账本数据版本，请更新客户端')
+  if (ledger.schemaVersion !== 1 && ledger.schemaVersion !== 2 && ledger.schemaVersion !== 3) throw new Error('不支持此账本数据版本，请更新客户端')
   if ( typeof ledger.id !== 'string' || !ledger.id || typeof ledger.name !== 'string' || !ledger.name.trim()) throw new Error('账本基础信息无效')
   if (!Array.isArray(ledger.accounts) || !Array.isArray(ledger.tags) || !Array.isArray(ledger.transactions) || !ledger.settings || typeof ledger.settings !== 'object') throw new Error('账本数据结构不完整')
   const assertUniqueIds = (items: { id: string }[], label: string) => {
@@ -51,23 +56,34 @@ export function validateLedgerData(value: unknown): asserts value is Ledger {
   }
   if (ledger.schemaVersion === 1 && ledger.tags.some(tag => tag.parentId !== undefined)) throw new Error('旧版账本不应包含父级关系')
   validateTagHierarchy(ledger.tags)
-  if (ledger.schemaVersion === 2 && (!Array.isArray(ledger.hierarchyChanges) || ledger.hierarchyChanges.some(change =>
+  if (ledger.schemaVersion >= 2 && (!Array.isArray(ledger.hierarchyChanges) || ledger.hierarchyChanges.some(change =>
     !change || typeof change.tagId !== 'string' || typeof change.changedAt !== 'string' ||
     !['reparent', 'delete'].includes(change.action) || !Number.isSafeInteger(change.affectedTransactions) || change.affectedTransactions < 0 ||
     (change.parentId !== undefined && typeof change.parentId !== 'string') || (change.previousParentId !== undefined && typeof change.previousParentId !== 'string')
   ))) throw new Error('标签层级审计信息无效')
+  if (ledger.schemaVersion === 3 && (!Number.isSafeInteger(ledger.nextTransactionRevision) || Number(ledger.nextTransactionRevision) < 1)) throw new Error('账本交易修订号无效')
   const accountIds = new Set(ledger.accounts.map((item) => item.id)); const tagIds = new Set(ledger.tags.map((item) => item.id)); const transactionIds = new Set(ledger.transactions.map((item) => item.id))
+  const commitPositions = new Set<string>()
   for (const transaction of ledger.transactions) {
     if (!transactionKinds.has(transaction.kind) || !recordRoles.has(transaction.recordRole) || typeof transaction.note !== 'string' || transaction.note.length > 240 || typeof transaction.bookedAt !== 'string' || !transaction.bookedAt) throw new Error('账目基础信息无效')
     const system = transaction.recordRole === 'system-account-close' || transaction.recordRole === 'reversal' || transaction.recordRole === 'restoration' ||
       (transaction.recordRole === 'replacement' && ledger.transactions.some(tx => tx.id === transaction.targetTransactionId && tx.recordRole === 'system-account-close'))
     const validTag = (tagId: string) => tagIds.has(tagId) || (system && tagId === '__system__')
     if (!Array.isArray(transaction.selectedTagIds) || new Set(transaction.selectedTagIds).size !== transaction.selectedTagIds.length || transaction.selectedTagIds.some(tagId => !validTag(tagId))) throw new Error('账目引用了无效或重复标签')
-    if (ledger.schemaVersion === 2) {
+    if (ledger.schemaVersion >= 2) {
       const direct = transaction.explicitTagIds
       if (!Array.isArray(direct) || new Set(direct).size !== direct.length || direct.some(tagId => !validTag(tagId))) throw new Error('账目直接标签无效')
       if (JSON.stringify(expandTransactionTags(ledger.tags, direct)) !== JSON.stringify(transaction.selectedTagIds)) throw new Error('账目祖先标签与直接选择不一致')
       if (transaction.primaryTagId && !direct.includes(transaction.primaryTagId)) throw new Error('主标签必须直接选中')
+    }
+    if (ledger.schemaVersion === 3) {
+      if (!validOccurredAt(transaction.occurredAt, transaction.bookedAt) || transaction.timePrecision !== 'second') throw new Error('账目发生时间无效')
+      if (!Number.isSafeInteger(transaction.commitRevision) || transaction.commitRevision! < 1 || transaction.commitRevision! >= ledger.nextTransactionRevision! ||
+        !Number.isSafeInteger(transaction.updatedRevision) || transaction.updatedRevision! < transaction.commitRevision! || transaction.updatedRevision! >= ledger.nextTransactionRevision! ||
+        !Number.isSafeInteger(transaction.commitIndex) || transaction.commitIndex! < 0) throw new Error('账目提交顺序无效')
+      const position = `${transaction.commitRevision}:${transaction.commitIndex}`
+      if (commitPositions.has(position)) throw new Error('账目提交顺序重复')
+      commitPositions.add(position)
     }
     const checkMoney = (money: Transaction['sourceMoney'], label: string) => { if (!money || !currencies.includes(money.currency) || !Number.isSafeInteger(money.minorUnits) || money.minorUnits < 0) throw new Error(`${label}无效`) }
     if (transaction.kind === 'income') { if (!transaction.destinationAccountId || !accountIds.has(transaction.destinationAccountId)) throw new Error('收入账目账户无效'); checkMoney(transaction.destinationMoney, '收入金额') }
@@ -123,9 +139,9 @@ function validateActiveAccount(ledger: Ledger, accountId: string | undefined, fi
   }
 }
 
-function transactionFromDraft(draft: TransactionDraft, role: Transaction['recordRole'] = 'normal', groupId?: string, ledger?: Ledger): Transaction {
-  const timestamp = now()
+function transactionFromDraft(draft: TransactionDraft, role: Transaction['recordRole'] = 'normal', groupId?: string, ledger?: Ledger, timestamp = now()): Transaction {
   if (!draft.bookedAt) throw new Error('请选择记账日期')
+  if (!validOccurredAt(draft.occurredAt, draft.bookedAt)) throw new Error('请选择与记账日期一致的有效发生时间')
   if ((draft.note?.length ?? 0) > 240) throw new Error('备注不能超过 240 个字符')
   if (draft.kind === 'income') {
     if (!draft.destinationAccountId || !draft.destinationMoney) throw new Error('收入账目缺少收入账户或金额')
@@ -154,15 +170,35 @@ function transactionFromDraft(draft: TransactionDraft, role: Transaction['record
     explicitTagIds: draft.kind === 'expense' ? [...new Set(draft.selectedTagIds ?? [])] : [],
     selectedTagIds: draft.kind === 'expense' ? (ledger ? expandTransactionTags(ledger.tags, draft.selectedTagIds ?? []) : [...new Set(draft.selectedTagIds ?? [])]) : [],
     primaryTagId: draft.kind === 'expense' ? draft.primaryTagId : undefined,
-    note: draft.note?.trim() ?? '', bookedAt: draft.bookedAt, createdAt: timestamp, updatedAt: timestamp,
+    note: draft.note?.trim() ?? '', bookedAt: draft.bookedAt, occurredAt: draft.occurredAt, timePrecision: 'second', createdAt: timestamp, updatedAt: timestamp,
     recordRole: role, operationGroupId: groupId,
   }
 }
 
+function nextTransactionRevision(ledger: Ledger): number {
+  if (ledger.schemaVersion !== 3 || !Number.isSafeInteger(ledger.nextTransactionRevision)) throw new Error('账本需要先完成发生时间迁移')
+  const revision = ledger.nextTransactionRevision!
+  ledger.nextTransactionRevision = revision + 1
+  return revision
+}
+
+function stampTransactionBatch(ledger: Ledger, transactions: Transaction[], timestamp: string): void {
+  const revision = nextTransactionRevision(ledger)
+  transactions.forEach((transaction, index) => {
+    transaction.createdAt = timestamp
+    transaction.updatedAt = timestamp
+    transaction.commitRevision = revision
+    transaction.commitIndex = index
+    transaction.updatedRevision = revision
+  })
+}
+
 export function addTransactions(ledger: Ledger, drafts: TransactionDraft[]): Transaction[] {
   if (!drafts.length) throw new Error('至少需要一条账目')
-  const transactions = drafts.map((draft) => transactionFromDraft(draft, 'normal', undefined, ledger))
+  const timestamp = now()
+  const transactions = drafts.map((draft) => transactionFromDraft(draft, 'normal', undefined, ledger, timestamp))
   validateNonNegative(ledger, transactions)
+  stampTransactionBatch(ledger, transactions, timestamp)
   ledger.transactions.push(...transactions)
   ledger.updatedAt = now()
   return transactions
@@ -178,8 +214,9 @@ export function addAccount(ledger: Ledger, name: string, isPendingSpend: boolean
   const groupId = id()
   const transactions = currencies.map((currency) => transactionFromDraft({
     kind: 'income', destinationAccountId: account.id, destinationMoney: { currency, minorUnits: initial[currency] ?? 0 },
-    note: '账户初始余额', bookedAt: timestamp.slice(0, 10),
-  }, 'system-account-open', groupId))
+    note: '账户初始余额', bookedAt: timestamp.slice(0, 10), occurredAt: timestamp,
+  }, 'system-account-open', groupId, undefined, timestamp))
+  stampTransactionBatch(ledger, transactions, timestamp)
   ledger.accounts.push(account)
   ledger.transactions.push(...transactions)
   ledger.updatedAt = timestamp
@@ -206,8 +243,9 @@ export function deleteAccount(ledger: Ledger, accountId: string): void {
   const groupId = id()
   const transactions = currencies.map((currency) => transactionFromDraft({
     kind: 'expense', sourceAccountId: accountId, sourceMoney: { currency, minorUnits: balances[currency] ?? 0 },
-    selectedTagIds: ['__system__'], primaryTagId: '__system__', note: '删除账户时移出余额', bookedAt: timestamp.slice(0, 10),
-  }, 'system-account-close', groupId))
+    selectedTagIds: ['__system__'], primaryTagId: '__system__', note: '删除账户时移出余额', bookedAt: timestamp.slice(0, 10), occurredAt: timestamp,
+  }, 'system-account-close', groupId, undefined, timestamp))
+  stampTransactionBatch(ledger, transactions, timestamp)
   account.deletedAt = timestamp
   account.updatedAt = timestamp
   ledger.transactions.push(...transactions)
@@ -224,15 +262,15 @@ export function restoreAccount(ledger: Ledger, accountId: string): void {
   const timestamp = now()
   const restores = closes.flatMap((close) => {
     const restoration = {
-    ...transactionFromDraft({ kind: 'income', destinationAccountId: accountId, destinationMoney: close.sourceMoney!, note: '恢复账户余额', bookedAt: close.bookedAt }, 'restoration', groupId),
+    ...transactionFromDraft({ kind: 'income', destinationAccountId: accountId, destinationMoney: close.sourceMoney!, note: '恢复账户余额', bookedAt: close.bookedAt, occurredAt: close.occurredAt! }, 'restoration', groupId, undefined, timestamp),
     targetTransactionId: close.id,
       relatedTransactionIds: [close.id],
     }
     const replacement = {
       ...transactionFromDraft({
         kind: 'expense', sourceAccountId: accountId, sourceMoney: { currency: close.sourceMoney!.currency, minorUnits: 0 },
-        selectedTagIds: ['__system__'], primaryTagId: '__system__', note: '账户恢复后的替代记录', bookedAt: close.bookedAt,
-      }, 'replacement', groupId),
+        selectedTagIds: ['__system__'], primaryTagId: '__system__', note: '账户恢复后的替代记录', bookedAt: close.bookedAt, occurredAt: close.occurredAt!,
+      }, 'replacement', groupId, undefined, timestamp),
       targetTransactionId: close.id,
       relatedTransactionIds: [close.id, restoration.id],
     }
@@ -240,6 +278,7 @@ export function restoreAccount(ledger: Ledger, accountId: string): void {
     return [restoration, replacement]
   })
   validateNonNegative(ledger, restores)
+  stampTransactionBatch(ledger, restores, timestamp)
   ledger.transactions.push(...restores)
   account.deletedAt = undefined
   account.updatedAt = timestamp
@@ -288,11 +327,97 @@ function rebuildTagClosure(ledger: Ledger) {
 export function migrateLedgerV1(value: Ledger): Ledger {
   validateLedgerData(value)
   const candidate = structuredClone(value)
-  if (candidate.schemaVersion === 2) return candidate
+  if (candidate.schemaVersion >= 2) return candidate
   candidate.schemaVersion = 2
   candidate.hierarchyChanges = []
   for (const tx of candidate.transactions) tx.explicitTagIds = [...tx.selectedTagIds]
   rebuildTagClosure(candidate)
+  validateLedgerData(candidate)
+  return candidate
+}
+
+export interface OccurrenceMigrationEntry {
+  id: string
+  kind: Transaction['kind']
+  bookedAt: string
+  createdAt: string
+  updatedAt: string
+  note: string
+  sourceAccountName?: string
+  destinationAccountName?: string
+  amount?: Money
+  deleted: boolean
+  corrected: boolean
+}
+
+export function occurrenceMigrationEntries(value: Ledger): OccurrenceMigrationEntry[] {
+  const candidate = migrateLedgerV1(value)
+  if (candidate.schemaVersion === 3) return []
+  const accountName = (accountId?: string) => candidate.accounts.find((account) => account.id === accountId)?.name
+  return candidate.transactions
+    .filter((transaction) => transaction.recordRole === 'normal')
+    .map((root) => {
+      const effective = effectiveTransaction(candidate, root.id) ?? root
+      return {
+        id: root.id,
+        kind: effective.kind,
+        bookedAt: root.bookedAt,
+        createdAt: root.createdAt,
+        updatedAt: effective.updatedAt,
+        note: effective.note,
+        sourceAccountName: accountName(effective.sourceAccountId),
+        destinationAccountName: accountName(effective.destinationAccountId),
+        amount: effective.kind === 'income' ? effective.destinationMoney : effective.sourceMoney,
+        deleted: isTransactionDeleted(candidate, root.id),
+        corrected: effective.id !== root.id,
+      }
+    })
+    .sort((a, b) => b.bookedAt.localeCompare(a.bookedAt) || b.updatedAt.localeCompare(a.updatedAt))
+}
+
+function legacySystemOccurredAt(transaction: Transaction): string {
+  if (validOccurredAt(transaction.createdAt, transaction.bookedAt)) return transaction.createdAt
+  return `${transaction.bookedAt}T12:00:00Z`
+}
+
+/** Upgrades legacy ledgers without inventing business times for user-created root records. */
+export function migrateLedgerToV3(value: Ledger, occurredAtByTransactionId: Record<string, string>): Ledger {
+  const candidate = migrateLedgerV1(value)
+  if (candidate.schemaVersion === 3) return candidate
+  const roots = candidate.transactions.filter((transaction) => transaction.recordRole === 'normal')
+  for (const root of roots) {
+    const occurredAt = occurredAtByTransactionId[root.id]
+    if (!validOccurredAt(occurredAt, root.bookedAt)) throw new Error(`请为 ${root.bookedAt} 的账目补充有效发生时间`)
+    root.occurredAt = occurredAt
+  }
+  const byId = new Map(candidate.transactions.map((transaction) => [transaction.id, transaction]))
+  const resolveOccurredAt = (transaction: Transaction, seen = new Set<string>()): string => {
+    if (transaction.occurredAt) return transaction.occurredAt
+    if (seen.has(transaction.id)) throw new Error('账目发生时间引用成环')
+    seen.add(transaction.id)
+    if (transaction.recordRole === 'system-account-open' || transaction.recordRole === 'system-account-close') return legacySystemOccurredAt(transaction)
+    const target = transaction.targetTransactionId ? byId.get(transaction.targetTransactionId) : undefined
+    if (target) return resolveOccurredAt(target, seen)
+    const related = transaction.relatedTransactionIds?.map((transactionId) => byId.get(transactionId)).find(Boolean)
+    if (related) return resolveOccurredAt(related, seen)
+    throw new Error('无法确定内部账目的发生时间')
+  }
+  for (const transaction of candidate.transactions) {
+    transaction.occurredAt = resolveOccurredAt(transaction)
+    transaction.timePrecision = 'second'
+  }
+  let revision = 0
+  let previousGroup = ''
+  let groupIndex = 0
+  for (const transaction of candidate.transactions) {
+    const group = transaction.operationGroupId ? `group:${transaction.operationGroupId}` : `single:${transaction.id}`
+    if (group !== previousGroup) { revision += 1; groupIndex = 0; previousGroup = group }
+    transaction.commitRevision = revision
+    transaction.commitIndex = groupIndex++
+    transaction.updatedRevision = revision
+  }
+  candidate.schemaVersion = 3
+  candidate.nextTransactionRevision = revision + 1
   validateLedgerData(candidate)
   return candidate
 }
@@ -379,11 +504,13 @@ export function resolveAndDeleteTag(ledger: Ledger, tagId: string, resolutions: 
   })
 
   const timestamp = now()
+  const updatedRevision = resolved.length ? nextTransactionRevision(ledger) : undefined
   ledger.tags.push(...plannedTags.values())
   for (const item of resolved) {
     item.transaction.explicitTagIds = item.selectedTagIds
     item.transaction.primaryTagId = item.primaryTagId
     item.transaction.updatedAt = timestamp
+    item.transaction.updatedRevision = updatedRevision
   }
   removeTagNode(ledger, tagId, children)
   ledger.updatedAt = timestamp
@@ -430,8 +557,10 @@ export function addTransactionsWithTags(ledger: Ledger, drafts: TransactionDraft
     primaryTagId: draft.primaryTagId ? tagIdMap.get(draft.primaryTagId) ?? draft.primaryTagId : undefined,
   }))
   const shadow = { ...ledger, tags: [...ledger.tags, ...plannedTags] }
-  const transactions = mappedDrafts.map((draft) => transactionFromDraft(draft, 'normal', undefined, shadow))
+  const timestamp = now()
+  const transactions = mappedDrafts.map((draft) => transactionFromDraft(draft, 'normal', undefined, shadow, timestamp))
   validateNonNegative(ledger, transactions)
+  stampTransactionBatch(ledger, transactions, timestamp)
   ledger.tags.push(...plannedTags)
   ledger.transactions.push(...transactions)
   ledger.updatedAt = now()
@@ -446,7 +575,7 @@ function reverseDraft(tx: Transaction): TransactionDraft {
     destinationAccountId: tx.kind === 'expense' ? tx.sourceAccountId : tx.kind === 'income' ? undefined : tx.sourceAccountId,
     destinationMoney: tx.kind === 'expense' ? tx.sourceMoney : tx.kind === 'income' ? undefined : tx.sourceMoney,
     selectedTagIds: tx.kind === 'income' ? ['__system__'] : [], primaryTagId: tx.kind === 'income' ? '__system__' : undefined,
-    note: `冲销：${tx.note}`, bookedAt: tx.bookedAt,
+    note: `冲销：${tx.note}`, bookedAt: tx.bookedAt, occurredAt: tx.occurredAt!,
   }
 }
 
@@ -473,7 +602,7 @@ export function transactionAuditChain(ledger: Ledger, transactionId: string): Tr
   const effectiveIds = new Set([root.id, ...replacements.map((item) => item.id)])
   return ledger.transactions
     .filter((item) => item.id === root.id || item.targetTransactionId === root.id || (item.targetTransactionId && effectiveIds.has(item.targetTransactionId)) || item.relatedTransactionIds?.some((id) => effectiveIds.has(id)))
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .sort((a, b) => (b.commitRevision ?? 0) - (a.commitRevision ?? 0) || (b.commitIndex ?? 0) - (a.commitIndex ?? 0) || b.createdAt.localeCompare(a.createdAt))
 }
 
 export function updateTransactionTags(ledger: Ledger, transactionId: string, selectedTagIds: string[], primaryTagId: string): void {
@@ -486,6 +615,7 @@ export function updateTransactionTags(ledger: Ledger, transactionId: string, sel
   target.selectedTagIds = expandTagAncestors(ledger.tags, target.explicitTagIds)
   target.primaryTagId = primaryTagId
   target.updatedAt = now()
+  target.updatedRevision = nextTransactionRevision(ledger)
   ledger.updatedAt = target.updatedAt
 }
 
@@ -494,13 +624,15 @@ export function correctTransaction(ledger: Ledger, transactionId: string, draft:
   if (!root || isTransactionDeleted(ledger, root.id)) throw new Error('账目不存在或已删除')
   const current = effectiveTransaction(ledger, root.id)!
   const groupId = id()
-  const reversal = transactionFromDraft(reverseDraft(current), 'reversal', groupId)
+  const timestamp = now()
+  const reversal = transactionFromDraft(reverseDraft(current), 'reversal', groupId, undefined, timestamp)
   reversal.targetTransactionId = current.id
-  const replacement = transactionFromDraft({ ...draft, bookedAt: root.bookedAt }, 'replacement', groupId, ledger)
+  const replacement = transactionFromDraft({ ...draft, bookedAt: root.bookedAt, occurredAt: root.occurredAt! }, 'replacement', groupId, ledger, timestamp)
   replacement.targetTransactionId = root.id
   reversal.relatedTransactionIds = [root.id, replacement.id]
   replacement.relatedTransactionIds = [root.id, current.id, reversal.id]
   validateNonNegative(ledger, [reversal, replacement])
+  stampTransactionBatch(ledger, [reversal, replacement], timestamp)
   ledger.transactions.push(reversal, replacement)
   ledger.updatedAt = replacement.updatedAt
   return replacement
@@ -511,12 +643,14 @@ export function reverseTransaction(ledger: Ledger, transactionId: string): Trans
   if (!root) throw new Error('只能删除普通账目')
   if (isTransactionDeleted(ledger, root.id)) throw new Error('账目已经删除')
   const target = effectiveTransaction(ledger, root.id)!
-  const reversal = transactionFromDraft(reverseDraft(target), 'reversal')
+  const timestamp = now()
+  const reversal = transactionFromDraft(reverseDraft(target), 'reversal', undefined, undefined, timestamp)
   reversal.targetTransactionId = root.id
   reversal.relatedTransactionIds = target.id === root.id ? [root.id] : [root.id, target.id]
   validateNonNegative(ledger, [reversal])
+  stampTransactionBatch(ledger, [reversal], timestamp)
   ledger.transactions.push(reversal)
-  ledger.updatedAt = now()
+  ledger.updatedAt = timestamp
   return reversal
 }
 
@@ -529,11 +663,13 @@ export function restoreTransaction(ledger: Ledger, transactionId: string): Trans
   const target = rootTransaction(ledger, transactionId)
   const reversal = [...ledger.transactions].reverse().find((tx) => tx.recordRole === 'reversal' && tx.targetTransactionId === target?.id && !tx.operationGroupId && !ledger.transactions.some((candidate) => candidate.recordRole === 'restoration' && candidate.targetTransactionId === tx.id))
   if (!target || !reversal) throw new Error('账目不存在或未被删除')
-  const restoration = transactionFromDraft(reverseDraft(reversal), 'restoration')
+  const timestamp = now()
+  const restoration = transactionFromDraft(reverseDraft(reversal), 'restoration', undefined, undefined, timestamp)
   restoration.targetTransactionId = reversal.id
   restoration.relatedTransactionIds = [target.id, reversal.id]
   validateNonNegative(ledger, [restoration])
+  stampTransactionBatch(ledger, [restoration], timestamp)
   ledger.transactions.push(restoration)
-  ledger.updatedAt = now()
+  ledger.updatedAt = timestamp
   return restoration
 }

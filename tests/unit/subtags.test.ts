@@ -8,7 +8,7 @@ function fixture() {
   const ledger = createLedger('子标签测试'), account = addAccount(ledger, '现金', false, { CNY: 10000, USD: 5000, JPY: 1000 })
   const parent = ledger.tags.find(tag => tag.name === '娱乐')!
   const child = addTag(ledger, '游戏付款', parent.id), leaf = addTag(ledger, '游戏内购买', child.id), sibling = addTag(ledger, '电影', parent.id)
-  const draft: TransactionDraft = { kind: 'expense', sourceAccountId: account.id, sourceMoney: { currency: 'CNY', minorUnits: 100 }, selectedTagIds: [leaf.id, sibling.id], primaryTagId: leaf.id, bookedAt: '2026-09-08' }
+  const draft: TransactionDraft = { kind: 'expense', sourceAccountId: account.id, sourceMoney: { currency: 'CNY', minorUnits: 100 }, selectedTagIds: [leaf.id, sibling.id], primaryTagId: leaf.id, bookedAt: '2026-09-08', occurredAt: '2026-09-08T12:00:00Z' }
   return { ledger, account, parent, child, leaf, sibling, draft }
 }
 describe('subtags and schema migration', () => {
@@ -98,7 +98,7 @@ describe('subtags and schema migration', () => {
     const ledger = createLedger('旧账本')
     const account = addAccount(ledger, '现金', false, { CNY: 10000, USD: 5000, GBP: 200, JPY: 300 })
     const [tag, secondary] = ledger.tags
-    const draft: TransactionDraft = { kind: 'expense', sourceAccountId: account.id, sourceMoney: { currency: 'CNY', minorUnits: 100 }, selectedTagIds: [secondary!.id, tag!.id], primaryTagId: tag!.id, bookedAt: '2026-01-01' }
+    const draft: TransactionDraft = { kind: 'expense', sourceAccountId: account.id, sourceMoney: { currency: 'CNY', minorUnits: 100 }, selectedTagIds: [secondary!.id, tag!.id], primaryTagId: tag!.id, bookedAt: '2026-01-01', occurredAt: '2026-01-01T12:00:00Z' }
     const [tx] = addTransactions(ledger, [draft])
     correctTransaction(ledger, tx!.id, draft)
     reverseTransaction(ledger, tx!.id)

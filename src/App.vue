@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, w
 import { useRoute, useRouter } from 'vue-router'
 import { currencyRules, formatMinorUnits, formatMoney, toMinorUnits } from './core/domain/money'
 import { currencies, type Currency, type Transaction, type TransactionDraft, type TransactionKind } from './core/domain/types'
-import { directTags, type PendingTag, type TagDeletionResolution } from './core/domain/ledger'
+import { directTags, type OccurrenceMigrationEntry, type PendingTag, type TagDeletionResolution } from './core/domain/ledger'
 import { defaultTheme, normalizeHue, profileForHue, lightThemeColor, hslColor, previewThemeColor, type ColorTone, type ThemeChannel } from './core/domain/theme'
 import { useLedgerStore } from './modules/ledger/session'
 import { appPages, type AppPage } from './app/router'
@@ -29,6 +29,9 @@ const page = computed<AppPage>({
   get: () => appPages.includes(route.name as AppPage) ? route.name as AppPage : 'dashboard',
   set: (value) => { void router.push({ name: value }) },
 })
+type SettingsSection = 'backup' | 'security' | 'appearance'
+const settingsSection = ref<SettingsSection | null>('security')
+function toggleSettingsSection(section: SettingsSection) { settingsSection.value = settingsSection.value === section ? null : section }
 type SessionTransition = 'idle' | 'unlocking' | 'locking'
 const sessionTransition = ref<SessionTransition>('idle')
 const showLogin = computed(() => !session.isUnlocked || sessionTransition.value !== 'idle')
@@ -50,6 +53,8 @@ const missingCapabilities = blockingCapabilityMessages(capabilities)
 const passphraseForm = reactive({ oldSecret: '', newSecret: '', confirmation: '' })
 const securityForm = reactive<{ secret: string; kdf: KdfId; encryption: EncryptionId }>({ secret: '', kdf: 'PBKDF2-SHA-256', encryption: 'AES-256-GCM' })
 const recoverySecret = ref('')
+type MigrationTimeRow = OccurrenceMigrationEntry & { occurredAtLocal: string }
+const migrationTimeRows = ref<MigrationTimeRow[]>([])
 type ToastType = 'success' | 'warning' | 'error'
 interface ToastMessage { id: number; type: ToastType; message: string }
 const toasts = ref<ToastMessage[]>([])
@@ -66,6 +71,65 @@ async function loadPwaUpdate() {
   catch { notify('error', '新版本载入失败，请稍后重试') }
 }
 watch(() => session.error, (error) => { if (error) notify('error', error) })
+function localDateTime(date = new Date()) {
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
+  return local.toISOString().slice(0, 19)
+}
+function occurredAtFromLocal(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/.test(value)) throw new Error('请填写有效的发生时间')
+  const normalized = value.length === 16 ? `${value}:00` : value
+  const date = new Date(normalized)
+  if (!Number.isFinite(date.getTime())) throw new Error('发生时间无效')
+  const offset = -date.getTimezoneOffset()
+  const sign = offset >= 0 ? '+' : '-'
+  const hours = String(Math.floor(Math.abs(offset) / 60)).padStart(2, '0')
+  const minutes = String(Math.abs(offset) % 60).padStart(2, '0')
+  return `${normalized}${sign}${hours}:${minutes}`
+}
+function displayOccurredAt(transaction: Transaction | TransactionDraft) { return transaction.occurredAt?.replace('T', ' ').slice(0, 19) ?? transaction.bookedAt }
+function generateMigrationTimes() {
+  const positions = new Map<string, number>()
+  for (const row of migrationTimeRows.value) {
+    const position = positions.get(row.bookedAt) ?? 0
+    const seconds = Math.max(0, 20 * 3600 - position * 60)
+    const hours = String(Math.floor(seconds / 3600)).padStart(2, '0')
+    const minutes = String(Math.floor(seconds % 3600 / 60)).padStart(2, '0')
+    row.occurredAtLocal = `${row.bookedAt}T${hours}:${minutes}:00`
+    positions.set(row.bookedAt, position + 1)
+  }
+}
+watch(() => session.migration?.migrationInfo, (info) => {
+  migrationTimeRows.value = (info?.occurrenceEntries ?? []).map((entry) => ({ ...entry, occurredAtLocal: '' }))
+  if (migrationTimeRows.value.length) generateMigrationTimes()
+})
+function moveMigrationRow(index: number, direction: -1 | 1) {
+  const target = index + direction
+  const rows = migrationTimeRows.value
+  if (!rows[index] || !rows[target] || rows[index]!.bookedAt !== rows[target]!.bookedAt) return
+  const time = rows[index]!.occurredAtLocal
+  rows[index]!.occurredAtLocal = rows[target]!.occurredAtLocal
+  rows[target]!.occurredAtLocal = time
+  ;[rows[index], rows[target]] = [rows[target]!, rows[index]!]
+}
+function confirmOccurrenceMigration() {
+  try {
+    const occurredAt: Record<string, string> = {}
+    const latestByDate = new Map<string, string>()
+    for (const row of migrationTimeRows.value) {
+      if (!row.occurredAtLocal.startsWith(`${row.bookedAt}T`)) throw new Error('发生时间必须位于原记账日期内')
+      const previous = latestByDate.get(row.bookedAt)
+      if (previous && row.occurredAtLocal > previous) throw new Error(`${row.bookedAt} 的发生时间与当前排列顺序不一致`)
+      latestByDate.set(row.bookedAt, row.occurredAtLocal)
+      occurredAt[row.id] = occurredAtFromLocal(row.occurredAtLocal)
+    }
+    session.confirmMigration(occurredAt)
+  } catch (cause) { notify('error', messageOf(cause)) }
+}
+function cancelOccurrenceMigration() {
+  const shouldLockCurrentLedger = session.isUnlocked
+  session.confirmMigration(false)
+  if (shouldLockCurrentLedger) lock('away')
+}
 watch(dialog, async (current, previous) => {
   if (current && !previous) focusBeforeDialog = document.activeElement instanceof HTMLElement ? document.activeElement : null
   if (current) {
@@ -153,7 +217,13 @@ const balances = computed(() => ledger.value?.balances ?? {})
 const activeAccounts = computed(() => ledger.value?.accounts.filter((account) => !account.deletedAt) ?? [])
 const normalTransactions = computed(() => ledger.value?.normalTransactions ?? [])
 const deletedTransactions = computed(() => ledger.value?.deletedTransactions ?? [])
-const recentTransactions = computed(() => normalTransactions.value.slice(0, 6))
+function compareOccurrence(a: Transaction, b: Transaction, direction: 1 | -1) {
+  const occurred = (a.occurredAt ?? a.bookedAt).localeCompare(b.occurredAt ?? b.bookedAt) * direction
+  if (occurred) return occurred
+  const revision = ((a.commitRevision ?? 0) - (b.commitRevision ?? 0)) * direction
+  return revision || (a.commitIndex ?? 0) - (b.commitIndex ?? 0)
+}
+const recentTransactions = computed(() => [...normalTransactions.value].sort((a, b) => compareOccurrence(a, b, -1)).slice(0, 6))
 const totals = computed(() => ledger.value?.totals ?? Object.fromEntries(currencies.map((currency) => [currency, { income: 0, expense: 0 }])) as Record<Currency, { income: number; expense: number }>)
 function categoryBalance(pending: boolean, currency: Currency) { return activeAccounts.value.filter((account) => account.isPendingSpend === pending).reduce((sum, account) => sum + (balances.value[account.id]?.[currency] ?? 0), 0) }
 
@@ -484,8 +554,8 @@ async function confirmTagDelete() {
   if (!session.error) { dialog.value = null; notify('success', '标签及其引用处理已完成') }
 }
 
-interface DraftForm { kind: TransactionKind; sourceAccountId: string; sourceAmount: string; sourceCurrency: Currency; destinationAccountId: string; destinationAmount: string; destinationCurrency: Currency; selectedTagIds: string[]; primaryTagId: string; note: string; bookedAt: string }
-const emptyDraft = (): DraftForm => ({ kind: 'expense', sourceAccountId: '', sourceAmount: '', sourceCurrency: 'CNY', destinationAccountId: '', destinationAmount: '', destinationCurrency: 'CNY', selectedTagIds: [], primaryTagId: '', note: '', bookedAt: new Date().toISOString().slice(0, 10) })
+interface DraftForm { kind: TransactionKind; sourceAccountId: string; sourceAmount: string; sourceCurrency: Currency; destinationAccountId: string; destinationAmount: string; destinationCurrency: Currency; selectedTagIds: string[]; primaryTagId: string; note: string; occurredAtLocal: string }
+const emptyDraft = (): DraftForm => ({ kind: 'expense', sourceAccountId: '', sourceAmount: '', sourceCurrency: 'CNY', destinationAccountId: '', destinationAmount: '', destinationCurrency: 'CNY', selectedTagIds: [], primaryTagId: '', note: '', occurredAtLocal: localDateTime() })
 const draftForm = reactive<DraftForm>(emptyDraft())
 const pendingDrafts = ref<TransactionDraft[]>([])
 const pendingTags = ref<PendingTag[]>([])
@@ -536,11 +606,11 @@ const filteredTransactionRows = computed(() => {
   })
   return rows.sort((a, b) => {
     if (transactionFilters.sort === 'updated-asc') return a.updatedAt.localeCompare(b.updatedAt)
-    if (transactionFilters.sort === 'booked-desc') return b.bookedAt.localeCompare(a.bookedAt)
-    if (transactionFilters.sort === 'booked-asc') return a.bookedAt.localeCompare(b.bookedAt)
+    if (transactionFilters.sort === 'booked-desc') return compareOccurrence(a, b, -1)
+    if (transactionFilters.sort === 'booked-asc') return compareOccurrence(a, b, 1)
     if (transactionFilters.sort === 'amount-desc') return (transactionMoney(b)?.minorUnits ?? 0) - (transactionMoney(a)?.minorUnits ?? 0)
     if (transactionFilters.sort === 'amount-asc') return (transactionMoney(a)?.minorUnits ?? 0) - (transactionMoney(b)?.minorUnits ?? 0)
-    return b.updatedAt.localeCompare(a.updatedAt)
+    return (b.updatedRevision ?? 0) - (a.updatedRevision ?? 0) || b.updatedAt.localeCompare(a.updatedAt) || (a.commitIndex ?? 0) - (b.commitIndex ?? 0)
   })
 })
 const transactionPageCount = computed(() => Math.max(1, Math.ceil(filteredTransactionRows.value.length / TRANSACTIONS_PER_PAGE)))
@@ -586,13 +656,14 @@ function openTransactionCorrection(tx: Transaction) {
   Object.assign(correctionForm, {
     kind: tx.kind, sourceAccountId: tx.sourceAccountId ?? '', sourceAmount: inputAmount(tx, 'source'), sourceCurrency: tx.sourceMoney?.currency ?? 'CNY',
     destinationAccountId: tx.destinationAccountId ?? '', destinationAmount: inputAmount(tx, 'destination'), destinationCurrency: tx.destinationMoney?.currency ?? 'CNY',
-    selectedTagIds: [...directTags(tx)], primaryTagId: tx.primaryTagId ?? '', note: tx.note, bookedAt: tx.bookedAt,
+    selectedTagIds: [...directTags(tx)], primaryTagId: tx.primaryTagId ?? '', note: tx.note, occurredAtLocal: tx.occurredAt?.slice(0, 19) ?? `${tx.bookedAt}T12:00:00`,
   })
   dialog.value = 'transaction-correct'
 }
 async function saveTransactionCorrection() {
   try {
-    const draft: TransactionDraft = { kind: correctionForm.kind, bookedAt: correctionForm.bookedAt, note: correctionForm.note }
+    const occurredAt = occurredAtFromLocal(correctionForm.occurredAtLocal)
+    const draft: TransactionDraft = { kind: correctionForm.kind, bookedAt: correctionForm.occurredAtLocal.slice(0, 10), occurredAt, note: correctionForm.note }
     if (correctionForm.kind !== 'income') { draft.sourceAccountId = correctionForm.sourceAccountId; draft.sourceMoney = { currency: correctionForm.sourceCurrency, minorUnits: toMinorUnits(correctionForm.sourceAmount, correctionForm.sourceCurrency) } }
     if (correctionForm.kind !== 'expense') { draft.destinationAccountId = correctionForm.destinationAccountId; draft.destinationMoney = { currency: correctionForm.destinationCurrency, minorUnits: toMinorUnits(correctionForm.destinationAmount, correctionForm.destinationCurrency) } }
     if (correctionForm.kind === 'expense') { draft.selectedTagIds = [...correctionForm.selectedTagIds]; draft.primaryTagId = correctionForm.primaryTagId }
@@ -668,9 +739,15 @@ function syncTransferAmount(changed: 'source' | 'destination') {
   else draftForm.sourceAmount = draftForm.destinationAmount
 }
 function copyPendingDraft(index: number) { pendingDrafts.value.push(JSON.parse(JSON.stringify(pendingDrafts.value[index]!)) as TransactionDraft) }
+function movePendingDraft(index: number, direction: -1 | 1) {
+  const target = index + direction
+  if (!pendingDrafts.value[index] || !pendingDrafts.value[target]) return
+  ;[pendingDrafts.value[index], pendingDrafts.value[target]] = [pendingDrafts.value[target]!, pendingDrafts.value[index]!]
+}
 function removePendingDraft(index: number) { pendingDrafts.value.splice(index, 1); cleanUnusedPendingTags() }
 function currentTransactionDraft(): TransactionDraft {
-  const draft: TransactionDraft = { kind: draftForm.kind, bookedAt: draftForm.bookedAt, note: draftForm.note }
+  const occurredAt = occurredAtFromLocal(draftForm.occurredAtLocal)
+  const draft: TransactionDraft = { kind: draftForm.kind, bookedAt: draftForm.occurredAtLocal.slice(0, 10), occurredAt, note: draftForm.note }
   if (draftForm.kind !== 'income') { draft.sourceAccountId = draftForm.sourceAccountId; draft.sourceMoney = { currency: draftForm.sourceCurrency, minorUnits: toMinorUnits(draftForm.sourceAmount, draftForm.sourceCurrency) } }
   if (draftForm.kind !== 'expense') { draft.destinationAccountId = draftForm.destinationAccountId; draft.destinationMoney = { currency: draftForm.destinationCurrency, minorUnits: toMinorUnits(draftForm.destinationAmount, draftForm.destinationCurrency) } }
   if (draftForm.kind === 'expense') {
@@ -908,7 +985,7 @@ function toggleColorTone(event: Event) {
           <article v-for="currency in currencies" :key="currency" class="metric-card"><span>{{ currency }}</span><strong>{{ formatMinorUnits(Object.values(balances).reduce((sum, item) => sum + (item[currency] ?? 0), 0), currency) }}</strong><div><button class="metric-link income-text" @click="drillToTransactions({ currency,kind:'income' })">收入 {{ formatMinorUnits(totals[currency].income, currency) }}</button><button class="metric-link expense-text" @click="drillToTransactions({ currency,kind:'expense' })">支出 {{ formatMinorUnits(totals[currency].expense, currency) }}</button></div></article>
         </div>
         <div class="dashboard-detail-grid"><section class="surface"><div class="section-title"><div><span class="eyebrow">BY ACCOUNT</span><h3>账户余额概览</h3></div><button class="link-button" @click="page='accounts'">管理账户 →</button></div><div class="dashboard-account-list"><button v-for="account in activeAccounts" :key="account.id" @click="drillToTransactions({ accountId:account.id })"><strong>{{ account.name }}</strong><span v-for="currency in currencies.filter(item => (balances[account.id]?.[item] ?? 0) !== 0)" :key="currency">{{ formatMinorUnits(balances[account.id]?.[currency] ?? 0,currency) }}</span><small v-if="currencies.every(item => (balances[account.id]?.[item] ?? 0) === 0)">余额为 0</small></button></div></section><section class="surface"><span class="eyebrow">PURPOSE</span><h3>储蓄与待支出</h3><div class="category-balance-list"><div v-for="currency in currencies" :key="currency"><strong>{{ currency }}</strong><span>储蓄 {{ formatMinorUnits(categoryBalance(false,currency),currency) }}</span><span>待支出 {{ formatMinorUnits(categoryBalance(true,currency),currency) }}</span></div></div><button class="primary full" @click="page='analytics'">打开完整统计</button></section></div>
-        <section class="surface"><div class="section-title"><div><span class="eyebrow">RECENT ACTIVITY</span><h3>最近账目</h3></div><button class="link-button" @click="page = 'transactions'">查看全部 →</button></div><div v-if="recentTransactions.length" class="transaction-list"><article v-for="tx in recentTransactions" :key="tx.id"><div class="tx-icon" :class="tx.kind">{{ tx.kind === 'income' ? '↙' : tx.kind === 'expense' ? '↗' : '↔' }}</div><div><strong>{{ transactionTitle(tx) }}</strong><small>{{ tx.bookedAt }} · {{ tx.note || (exchangeTagSummary(tx) ? '换汇' : tagNameOf(tx.primaryTagId)) }}</small><small v-if="exchangeTagSummary(tx)" class="implicit-tag-summary">{{ exchangeTagSummary(tx) }}</small></div><b>{{ transactionAmount(tx) }}</b></article></div><div v-else class="empty compact">还没有账目</div></section>
+        <section class="surface"><div class="section-title"><div><span class="eyebrow">RECENT ACTIVITY</span><h3>最近账目</h3></div><button class="link-button" @click="page = 'transactions'">查看全部 →</button></div><div v-if="recentTransactions.length" class="transaction-list"><article v-for="tx in recentTransactions" :key="tx.id"><div class="tx-icon" :class="tx.kind">{{ tx.kind === 'income' ? '↙' : tx.kind === 'expense' ? '↗' : '↔' }}</div><div><strong>{{ transactionTitle(tx) }}</strong><small>{{ displayOccurredAt(tx) }} · {{ tx.note || (exchangeTagSummary(tx) ? '换汇' : tagNameOf(tx.primaryTagId)) }}</small><small v-if="exchangeTagSummary(tx)" class="implicit-tag-summary">{{ exchangeTagSummary(tx) }}</small></div><b>{{ transactionAmount(tx) }}</b></article></div><div v-else class="empty compact">还没有账目</div></section>
       </template>
 
       <template v-if="page === 'accounts'">
@@ -932,22 +1009,41 @@ function toggleColorTone(event: Event) {
 
       <template v-if="page === 'transactions'">
         <section class="surface transaction-filter-panel"><div class="section-title"><div><span class="eyebrow">COMBINED FILTERS</span><h3>组合筛选</h3></div><button class="ghost small" @click="clearTransactionFilters">清空筛选</button></div><div class="transaction-filter-grid"><label>记账开始<input name="transaction-filters-booked-from" v-model="transactionFilters.bookedFrom" type="date" /></label><label>记账结束<input name="transaction-filters-booked-to" v-model="transactionFilters.bookedTo" type="date" /></label><label>类型<select name="transaction-filters-kind" v-model="transactionFilters.kind"><option value="all">全部</option><option value="income">收入（含换汇）</option><option value="expense">支出（含换汇）</option><option value="transfer">转移</option></select></label><label>账户<select name="transaction-filters-account-id" v-model="transactionFilters.accountId"><option value="">全部账户</option><option v-for="account in ledger?.accounts" :key="account.id" :value="account.id">{{ account.name }}</option></select></label><label>币种<select name="transaction-filters-currency" v-model="transactionFilters.currency"><option value="">全部币种</option><option v-for="currency in currencies" :key="currency">{{ currency }}</option></select></label><label>最小金额<input name="transaction-filters-min-amount" v-model="transactionFilters.minAmount" type="number" min="0" /></label><label>最大金额<input name="transaction-filters-max-amount" v-model="transactionFilters.maxAmount" type="number" min="0" /></label><label>标签<select name="transaction-filters-tag-id" v-model="transactionFilters.tagId"><option value="">全部标签</option><optgroup v-if="exchangeImplicitTags.length" label="换汇隐含标签"><option v-for="tag in exchangeImplicitTags" :key="tag.id" :value="tag.id">{{ tag.name }}</option></optgroup><optgroup label="普通标签"><option v-for="tag in ledger?.tags" :key="tag.id" :value="tag.id">{{ tagNameOf(tag.id) }}</option></optgroup></select></label><label>标签口径<select name="transaction-filters-tag-mode" v-model="transactionFilters.tagMode"><option value="included">包含子标签</option><option value="direct">仅直接选择</option><option value="primary">仅主标签（精确）</option><option value="primary-root">主标签按根级汇总</option></select></label><label>备注关键词<input name="transaction-filters-note" v-model="transactionFilters.note" placeholder="搜索备注" /></label><label>创建开始<input name="transaction-filters-created-from" v-model="transactionFilters.createdFrom" type="date" /></label><label>创建结束<input name="transaction-filters-created-to" v-model="transactionFilters.createdTo" type="date" /></label><label>修改开始<input name="transaction-filters-updated-from" v-model="transactionFilters.updatedFrom" type="date" /></label><label>修改结束<input name="transaction-filters-updated-to" v-model="transactionFilters.updatedTo" type="date" /></label><label>排序<select name="transaction-filters-sort" v-model="transactionFilters.sort"><option value="updated-desc">最近修改优先</option><option value="updated-asc">最早修改优先</option><option value="booked-desc">记账日期从新到旧</option><option value="booked-asc">记账日期从旧到新</option><option value="amount-desc">金额从高到低</option><option value="amount-asc">金额从低到高</option></select></label></div></section>
-        <section class="surface"><div class="section-title"><div><span class="eyebrow">HISTORY</span><h3>{{ showDeleted ? '已删除账目' : '有效账目' }} · {{ filteredTransactionRows.length }} 条</h3></div><div class="actions"><button class="primary" @click="openTransactionEntry">＋ 新增账目</button><button class="ghost" @click="showDeleted = !showDeleted">{{ showDeleted ? '查看有效账目' : `已删除 (${deletedTransactions.length})` }}</button></div></div><div class="transaction-list"><article v-for="tx in paginatedTransactions" :key="tx.id"><div class="tx-icon" :class="tx.kind">{{ tx.kind === 'income' ? '↙' : tx.kind === 'expense' ? '↗' : '↔' }}</div><div><strong>{{ transactionTitle(tx) }}</strong><small>{{ tx.bookedAt }} · {{ tx.note || tagNameOf(tx.primaryTagId) }}</small><small v-if="tx.selectedTagIds.length">直接：{{ directTags(tx).map(tagNameOf).join('、') }}<template v-if="tx.selectedTagIds.some(id => !directTags(tx).includes(id))"> · 继承：{{ tx.selectedTagIds.filter(id => !directTags(tx).includes(id)).map(tagNameOf).join('、') }}</template></small><small v-if="exchangeTagSummary(tx)" class="implicit-tag-summary">{{ exchangeTagSummary(tx) }}</small><small v-if="tx.recordRole === 'replacement'">已更正 · 原记账日期保持不变</small></div><b>{{ transactionAmount(tx) }}</b><div class="transaction-row-actions"><button class="ghost small" @click="openAuditChain(tx)">历史</button><button v-if="!showDeleted && tx.kind === 'expense'" class="ghost small" @click="openTransactionTags(tx)">标签</button><button v-if="!showDeleted" class="ghost small" @click="openTransactionCorrection(tx)">更正</button><button v-if="!showDeleted" class="ghost small danger-text" :aria-label="'删除账目 ' + transactionTitle(tx)" @click="openTransactionDelete(tx.id)">删除</button><button v-else class="ghost small" @click="recoverTransaction(tx.id)">恢复</button></div></article><div v-if="!filteredTransactionRows.length" class="empty compact">没有符合筛选条件的记录</div></div><div v-if="transactionPageCount > 1" class="pagination"><button class="ghost small" :disabled="transactionPage <= 1" @click="transactionPage--">上一页</button><span>第 {{ transactionPage }} / {{ transactionPageCount }} 页</span><button class="ghost small" :disabled="transactionPage >= transactionPageCount" @click="transactionPage++">下一页</button></div></section>
+        <section class="surface"><div class="section-title"><div><span class="eyebrow">HISTORY</span><h3>{{ showDeleted ? '已删除账目' : '有效账目' }} · {{ filteredTransactionRows.length }} 条</h3></div><div class="actions"><button class="primary" @click="openTransactionEntry">＋ 新增账目</button><button class="ghost" @click="showDeleted = !showDeleted">{{ showDeleted ? '查看有效账目' : `已删除 (${deletedTransactions.length})` }}</button></div></div><div class="transaction-list"><article v-for="tx in paginatedTransactions" :key="tx.id"><div class="tx-icon" :class="tx.kind">{{ tx.kind === 'income' ? '↙' : tx.kind === 'expense' ? '↗' : '↔' }}</div><div><strong>{{ transactionTitle(tx) }}</strong><small>{{ displayOccurredAt(tx) }} · {{ tx.note || tagNameOf(tx.primaryTagId) }}</small><small v-if="tx.selectedTagIds.length">直接：{{ directTags(tx).map(tagNameOf).join('、') }}<template v-if="tx.selectedTagIds.some(id => !directTags(tx).includes(id))"> · 继承：{{ tx.selectedTagIds.filter(id => !directTags(tx).includes(id)).map(tagNameOf).join('、') }}</template></small><small v-if="exchangeTagSummary(tx)" class="implicit-tag-summary">{{ exchangeTagSummary(tx) }}</small><small v-if="tx.recordRole === 'replacement'">已更正 · 原始发生时间保持不变</small></div><b>{{ transactionAmount(tx) }}</b><div class="transaction-row-actions"><button class="ghost small" @click="openAuditChain(tx)">历史</button><button v-if="!showDeleted && tx.kind === 'expense'" class="ghost small" @click="openTransactionTags(tx)">标签</button><button v-if="!showDeleted" class="ghost small" @click="openTransactionCorrection(tx)">更正</button><button v-if="!showDeleted" class="ghost small danger-text" :aria-label="'删除账目 ' + transactionTitle(tx)" @click="openTransactionDelete(tx.id)">删除</button><button v-else class="ghost small" @click="recoverTransaction(tx.id)">恢复</button></div></article><div v-if="!filteredTransactionRows.length" class="empty compact">没有符合筛选条件的记录</div></div><div v-if="transactionPageCount > 1" class="pagination"><button class="ghost small" :disabled="transactionPage <= 1" @click="transactionPage--">上一页</button><span>第 {{ transactionPage }} / {{ transactionPageCount }} 页</span><button class="ghost small" :disabled="transactionPage >= transactionPageCount" @click="transactionPage++">下一页</button></div></section>
       </template>
 
       <template v-if="page === 'analytics' && ledger"><AnalyticsPage :ledger="ledger" :primary-hue="currentPrimaryHue" :secondary-hue="currentSecondaryHue" @drill="drillToTransactions" /></template>
 
       <template v-if="page === 'settings'">
-        <section v-if="ledger?.hasMigrationBackup" class="surface settings settings-row"><div><h3>升级前备份</h3><p>独立保存的 v1 密文不会被后续编辑覆盖。使用旧版客户端前，请先导出此备份；升级后的新记录不包含在其中。</p></div><button class="ghost" @click="session.exportMigrationBackup">导出 v1 升级前备份</button></section>
-        <section class="surface settings settings-row"><div><span class="eyebrow">LEDGER IDENTITY</span><h3>账本名称</h3><p>当前名称：{{ ledger?.name }}。修改时会在最后一步要求访问口令确认。</p></div><button class="primary" @click="openRenameDialog">修改账本名称</button></section>
-        <section class="surface settings settings-row"><div><span class="eyebrow">COLOR TONE</span><h3>亮色调 / 暗色调</h3><p>改变页面的明暗基底，不改变已选择的主题色相。</p></div><div class="tone-switch-control"><span :class="{ active: currentColorTone === 'light' }">亮色调</span><label class="tone-switch"><input name="color-tone" type="checkbox" aria-label="切换亮暗色调" :checked="currentColorTone === 'dark'" :disabled="session.busy" @change="toggleColorTone"><span class="tone-switch-track"><span class="tone-switch-thumb"></span></span></label><span :class="{ active: currentColorTone === 'dark' }">暗色调</span></div></section>
-        <section class="surface settings settings-row"><div><span class="eyebrow">APPEARANCE</span><h3>主题颜色</h3><p>主色与副色均可选择任意色相；设置以紧凑的公开元数据随账本保存，并受到完整性认证。</p></div><button class="theme-entry" @click="openThemeDialog"><span class="theme-entry-colors"><i :style="{ '--preview-color': themeColor('primary') }"></i><i :style="{ '--preview-color': themeColor('secondary') }"></i></span><span>主色 {{ currentPrimaryHue }}° · 副色 {{ currentSecondaryHue }}°</span><span class="disclosure-triangle side" aria-hidden="true"></span></button></section>
-        <section class="surface settings settings-row"><div><span class="eyebrow">AUTO AWAY</span><h3>自动暂离</h3><p>无操作达到设定时间后清除解密会话，但保留当前页面和未提交草稿，重新解锁同一账本即可继续。</p></div><div class="timeout-setting"><label>等待秒数<input name="auto-lock-seconds-input" v-model.number="autoLockSecondsInput" type="number" min="30" max="86400" step="1" @keyup.enter="saveAutoLockSeconds" /></label><button class="primary" :disabled="session.busy || autoLockSecondsInput === currentAutoLockSeconds" @click="saveAutoLockSeconds">保存</button></div></section>
-        <section class="surface settings settings-row"><div><span class="eyebrow">ACCESS PASSPHRASE</span><h3>修改访问口令</h3><p>验证当前口令后，可为账本设置新的访问口令。</p></div><button class="primary" @click="openPassphraseDialog">修改访问口令</button></section>
-        <section class="surface settings settings-row"><div><span class="eyebrow">CRYPTO REGISTRY</span><h3>加密方式</h3><p>当前：{{ ledger?.security.kdf }} + {{ ledger?.security.encryption }}。更改后会生成全新数据密钥并原子替换容器。</p></div><button class="ghost" @click="openSecurityMigration">修改加密方式</button></section>
-        <section class="surface settings settings-row"><div><span class="eyebrow">RECOVERY</span><h3>恢复上一版密文</h3><p>每次覆盖写入前都会在 IndexedDB 中保留一个上一版本。恢复时需要该版本对应的访问口令。</p></div><button class="ghost" :disabled="!ledger?.hasRecovery" @click="openRecoveryDialog">{{ ledger?.hasRecovery ? '恢复上一版本' : '暂无上一版本' }}</button></section>
-        <section class="surface settings"><span class="eyebrow">ENCRYPTED BACKUP</span><h3>导出完整加密账本</h3><p>导出文件仅包含经过 Deflate 压缩、AES-256-GCM 加密后的容器，不生成明文中间文件。</p><button class="ghost" @click="session.exportCurrent">导出 .rwbl 文件</button></section>
-        <section class="surface settings danger-zone"><span class="eyebrow">DANGER ZONE</span><h3>删除当前账本</h3><p>删除会永久移除本机索引和加密容器。确认前可以一键导出完整密文备份。</p><button class="danger ghost" @click="openDeleteDialog(ledger!.id, ledger!.name)">删除账本</button></section>
+        <div class="settings-page">
+          <section class="surface settings-group" :class="{ open: settingsSection === 'backup' }">
+            <button type="button" class="settings-group-trigger" :aria-expanded="settingsSection === 'backup'" @click="toggleSettingsSection('backup')"><span><span class="eyebrow">BACKUP &amp; RECOVERY</span><strong>备份</strong></span><span class="disclosure-triangle" :class="{ expanded: settingsSection === 'backup' }" aria-hidden="true"></span></button>
+            <div class="collapse-shell" :class="{ open: settingsSection === 'backup' }" :inert="settingsSection !== 'backup'"><div class="collapse-content settings-group-content">
+              <article class="settings-item"><div><span class="eyebrow">ENCRYPTED BACKUP</span><h3>导出完整加密账本</h3><p>导出经过压缩和加密的完整容器，不生成明文中间文件。</p></div><button class="ghost settings-action" @click="session.exportCurrent">导出 .rwbl 文件</button></article>
+              <article v-if="ledger?.hasMigrationBackup" class="settings-item"><div><span class="eyebrow">MIGRATION BACKUP</span><h3>升级前备份</h3><p>导出独立保存的升级前密文；该备份不包含升级后的新记录。</p></div><button class="ghost settings-action" @click="session.exportMigrationBackup">导出升级前备份</button></article>
+              <article class="settings-item"><div><span class="eyebrow">RECOVERY</span><h3>恢复上一版密文</h3><p>恢复覆盖写入前保留的上一版本，需要该版本对应的访问口令。</p></div><button class="ghost settings-action" :disabled="!ledger?.hasRecovery" @click="openRecoveryDialog">{{ ledger?.hasRecovery ? '恢复上一版本' : '暂无上一版本' }}</button></article>
+            </div></div>
+          </section>
+
+          <section class="surface settings-group" :class="{ open: settingsSection === 'security' }">
+            <button type="button" class="settings-group-trigger" :aria-expanded="settingsSection === 'security'" @click="toggleSettingsSection('security')"><span><span class="eyebrow">LEDGER &amp; SECURITY</span><strong>账本安全</strong></span><span class="disclosure-triangle" :class="{ expanded: settingsSection === 'security' }" aria-hidden="true"></span></button>
+            <div class="collapse-shell" :class="{ open: settingsSection === 'security' }" :inert="settingsSection !== 'security'"><div class="collapse-content settings-group-content">
+              <article class="settings-item"><div><span class="eyebrow">LEDGER IDENTITY</span><h3>账本名称</h3><p>当前名称：{{ ledger?.name }}。修改时会要求访问口令确认。</p></div><button class="ghost settings-action" @click="openRenameDialog">修改账本名称</button></article>
+              <article class="settings-item"><div><span class="eyebrow">AUTO AWAY</span><h3>自动暂离</h3><p>无操作达到设定时间后清除解密会话，并保留当前页面和未提交草稿。</p></div><div class="timeout-setting"><label>等待秒数<input name="auto-lock-seconds-input" v-model.number="autoLockSecondsInput" type="number" min="30" max="86400" step="1" @keyup.enter="saveAutoLockSeconds" /></label><button class="ghost" :disabled="session.busy || autoLockSecondsInput === currentAutoLockSeconds" @click="saveAutoLockSeconds">保存</button></div></article>
+              <article class="settings-item"><div><span class="eyebrow">ACCESS PASSPHRASE</span><h3>修改访问口令</h3><p>验证当前口令后，为账本设置新的访问口令。</p></div><button class="ghost settings-action" @click="openPassphraseDialog">修改访问口令</button></article>
+              <article class="settings-item"><div><span class="eyebrow">CRYPTO REGISTRY</span><h3>加密方式</h3><p>当前：{{ ledger?.security.kdf }} + {{ ledger?.security.encryption }}。</p></div><button class="ghost settings-action" @click="openSecurityMigration">修改加密方式</button></article>
+              <article class="settings-item danger-zone"><div><span class="eyebrow">DANGER ZONE</span><h3>删除当前账本</h3><p>永久移除本机索引和加密容器；确认前仍可导出完整密文备份。</p></div><button class="ghost danger settings-action" @click="openDeleteDialog(ledger!.id, ledger!.name)">删除账本</button></article>
+            </div></div>
+          </section>
+
+          <section class="surface settings-group" :class="{ open: settingsSection === 'appearance' }">
+            <button type="button" class="settings-group-trigger" :aria-expanded="settingsSection === 'appearance'" @click="toggleSettingsSection('appearance')"><span><span class="eyebrow">COLOR &amp; TONE</span><strong>外观</strong></span><span class="disclosure-triangle" :class="{ expanded: settingsSection === 'appearance' }" aria-hidden="true"></span></button>
+            <div class="collapse-shell" :class="{ open: settingsSection === 'appearance' }" :inert="settingsSection !== 'appearance'"><div class="collapse-content settings-group-content">
+              <article class="settings-item"><div><span class="eyebrow">COLOR TONE</span><h3>亮色调 / 暗色调</h3><p>改变页面的明暗基底，不改变已选择的主题色相。</p></div><div class="tone-switch-control"><span :class="{ active: currentColorTone === 'light' }">亮色调</span><label class="tone-switch"><input name="color-tone" type="checkbox" aria-label="切换亮暗色调" :checked="currentColorTone === 'dark'" :disabled="session.busy" @change="toggleColorTone"><span class="tone-switch-track"><span class="tone-switch-thumb"></span></span></label><span :class="{ active: currentColorTone === 'dark' }">暗色调</span></div></article>
+              <article class="settings-item"><div><span class="eyebrow">APPEARANCE</span><h3>主题颜色</h3><p>主色与副色均可选择任意色相，并随当前账本保存。</p></div><button class="theme-entry settings-action" @click="openThemeDialog"><span class="theme-entry-colors"><i :style="{ '--preview-color': themeColor('primary') }"></i><i :style="{ '--preview-color': themeColor('secondary') }"></i></span><span>主色 {{ currentPrimaryHue }}° · 副色 {{ currentSecondaryHue }}°</span><span class="disclosure-triangle side" aria-hidden="true"></span></button></article>
+            </div></div>
+          </section>
+        </div>
       </template>
       </div>
       </Transition>
@@ -984,8 +1080,8 @@ function toggleColorTone(event: Event) {
       <template v-else-if="dialog === 'tag-delete-confirm'"><span class="eyebrow">FINAL CONFIRMATION</span><h2>确认删除“{{ tagDeleteTarget?.name }}”</h2><p class="modal-copy">{{ tagDeleteReferences.length ? `将原子更新 ${tagDeleteReferences.length} 条关联账目，然后删除标签。` : '该标签没有直接账目引用；如有子标签，请指定它们的去向。' }}</p><div v-if="tagDeleteChildren.length" class="hierarchy-warning"><p>保留 {{ tagDeleteChildren.map(tag => tag.name).join('、') }} 及所有后代，不级联删除。</p><label>子标签去向<select name="child-disposition-mode" v-model="childDisposition.mode"><option value="" disabled>请选择</option><option value="promote">提升到原父级（{{ parentNameOf(tagDeleteTarget?.parentId) }}）</option><option value="move">移动到其他父级</option></select></label><label v-if="childDisposition.mode === 'move'">目标父级<select name="child-disposition-parent" v-model="childDisposition.parentId"><option value="">根标签（无父级）</option><option v-for="tag in validParentChoices(tagDeleteTargetId)" :key="tag.id" :value="tag.id">{{ tagNameOf(tag.id) }}</option></select></label></div><div class="modal-actions"><button class="ghost" @click="closeDialog">取消</button><button class="danger" :disabled="session.busy || (tagDeleteChildren.length > 0 && !childDisposition.mode)" @click="confirmTagDelete">确认删除</button></div></template>
       <template v-else-if="dialog === 'transaction-delete'"><span class="eyebrow">DELETE TRANSACTION</span><h2>删除这笔账目？</h2><p class="modal-copy">系统不会移除原始记录，而会新增一条资金流向相反的冲销记录，并将两条记录关联。</p><div v-if="transactionDeleteTarget" class="rename-preview"><small>{{ transactionDeleteTarget.bookedAt }} · {{ transactionTitle(transactionDeleteTarget) }}</small><strong>{{ transactionAmount(transactionDeleteTarget) }}</strong></div><div class="modal-actions"><button class="ghost" @click="closeDialog">取消</button><button class="danger" :disabled="session.busy" @click="confirmTransactionDelete">确认删除账目</button></div></template>
       <template v-else-if="dialog === 'transaction-tags'"><span class="eyebrow">EDIT TAGS</span><h2>修改账目标签</h2><p class="modal-copy">单击切换选中状态，双击设为主标签。本操作只更新标签，不新增资金流水。</p><TagSelection :tags="ledger?.tags ?? []" v-model:selected="transactionTagIds" v-model:primary="transactionPrimaryTagId" /><div class="modal-actions"><button class="ghost" @click="closeDialog">取消</button><button class="primary" :disabled="session.busy || !transactionTagIds.length || !transactionPrimaryTagId" @click="saveTransactionTags">保存标签</button></div></template>
-      <template v-else-if="dialog === 'transaction-correct'"><span class="eyebrow">CORRECTION GROUP</span><h2>更正账目资金数据</h2><p class="modal-copy">保存后将原子追加“反向原值＋更正后新值”两条同组记录；首次记账日期保持为 {{ correctionForm.bookedAt }}。</p><div class="form-grid correction-form"><label>类型<select name="correction-form-kind" v-model="correctionForm.kind"><option value="expense">支出</option><option value="income">收入</option><option value="transfer">转移</option></select></label><label>首次记账日期<input name="correction-form-booked-at" v-model="correctionForm.bookedAt" type="date" disabled /></label><div v-if="correctionForm.kind!=='income'" class="picker-field entry-source-account"><span>支出账户</span><AccountPicker v-model="correctionForm.sourceAccountId" :accounts="activeAccounts" placeholder="选择支出账户" search-placeholder="搜索支出账户" /></div><label v-if="correctionForm.kind!=='income'">支出金额<div class="money-input"><input name="correction-form-source-amount" v-model="correctionForm.sourceAmount" type="number" min="0" /><select name="correction-form-source-currency" v-model="correctionForm.sourceCurrency"><option v-for="currency in currencies" :key="currency">{{ currency }}</option></select></div></label><div v-if="correctionForm.kind!=='expense'" class="picker-field entry-destination-account"><span>收入账户</span><AccountPicker v-model="correctionForm.destinationAccountId" :accounts="activeAccounts" placeholder="选择收入账户" search-placeholder="搜索收入账户" /></div><label v-if="correctionForm.kind!=='expense'">收入金额<div class="money-input"><input name="correction-form-destination-amount" v-model="correctionForm.destinationAmount" type="number" min="0" /><select name="correction-form-destination-currency" v-model="correctionForm.destinationCurrency"><option v-for="currency in currencies" :key="currency">{{ currency }}</option></select></div></label><label class="wide">备注<input name="correction-form-note" v-model="correctionForm.note" maxlength="240" /></label></div><div v-if="correctionForm.kind==='expense'" class="tag-picker"><span>支出标签</span><TagSelection :tags="ledger?.tags ?? []" v-model:selected="correctionForm.selectedTagIds" v-model:primary="correctionForm.primaryTagId" /></div><div class="modal-actions"><button class="ghost" @click="closeDialog">取消</button><button class="primary" :disabled="session.busy" @click="saveTransactionCorrection">保存更正</button></div></template>
-      <template v-else-if="dialog === 'audit-chain'"><span class="eyebrow">AUDIT TRAIL</span><h2>完整审计记录链</h2><p class="modal-copy">按产生时间从新到旧排列。业务日期始终显示该笔账目的首次记账日期。</p><div class="audit-chain"><article v-for="entry in auditChain" :key="entry.id"><span class="pill">{{ auditRole(entry.recordRole) }}</span><div><strong>{{ transactionTitle(entry) }}</strong><small>业务日期 {{ entry.bookedAt }} · 记录时间 {{ new Date(entry.createdAt).toLocaleString('zh-CN') }}</small><small v-if="entry.operationGroupId">更正组 {{ entry.operationGroupId.slice(0,8) }}</small></div><b>{{ transactionAmount(entry) }}</b></article></div><button class="ghost full" @click="closeDialog">关闭</button></template>
+      <template v-else-if="dialog === 'transaction-correct'"><span class="eyebrow">CORRECTION GROUP</span><h2>更正账目资金数据</h2><p class="modal-copy">保存后将原子追加“反向原值＋更正后新值”两条同组记录；原始发生时间保持为 {{ correctionForm.occurredAtLocal.replace('T', ' ') }}。</p><div class="form-grid correction-form"><label>类型<select name="correction-form-kind" v-model="correctionForm.kind"><option value="expense">支出</option><option value="income">收入</option><option value="transfer">转移</option></select></label><label>原始发生时间<input name="correction-form-occurred-at" v-model="correctionForm.occurredAtLocal" type="datetime-local" step="1" disabled /></label><div v-if="correctionForm.kind!=='income'" class="picker-field entry-source-account"><span>支出账户</span><AccountPicker v-model="correctionForm.sourceAccountId" :accounts="activeAccounts" placeholder="选择支出账户" search-placeholder="搜索支出账户" /></div><label v-if="correctionForm.kind!=='income'">支出金额<div class="money-input"><input name="correction-form-source-amount" v-model="correctionForm.sourceAmount" type="number" min="0" /><select name="correction-form-source-currency" v-model="correctionForm.sourceCurrency"><option v-for="currency in currencies" :key="currency">{{ currency }}</option></select></div></label><div v-if="correctionForm.kind!=='expense'" class="picker-field entry-destination-account"><span>收入账户</span><AccountPicker v-model="correctionForm.destinationAccountId" :accounts="activeAccounts" placeholder="选择收入账户" search-placeholder="搜索收入账户" /></div><label v-if="correctionForm.kind!=='expense'">收入金额<div class="money-input"><input name="correction-form-destination-amount" v-model="correctionForm.destinationAmount" type="number" min="0" /><select name="correction-form-destination-currency" v-model="correctionForm.destinationCurrency"><option v-for="currency in currencies" :key="currency">{{ currency }}</option></select></div></label><label class="wide">备注<input name="correction-form-note" v-model="correctionForm.note" maxlength="240" /></label></div><div v-if="correctionForm.kind==='expense'" class="tag-picker"><span>支出标签</span><TagSelection :tags="ledger?.tags ?? []" v-model:selected="correctionForm.selectedTagIds" v-model:primary="correctionForm.primaryTagId" /></div><div class="modal-actions"><button class="ghost" @click="closeDialog">取消</button><button class="primary" :disabled="session.busy" @click="saveTransactionCorrection">保存更正</button></div></template>
+      <template v-else-if="dialog === 'audit-chain'"><span class="eyebrow">AUDIT TRAIL</span><h2>完整审计记录链</h2><p class="modal-copy">按提交修订从新到旧排列。更正、冲销和恢复记录始终继承原始业务发生时间。</p><div class="audit-chain"><article v-for="entry in auditChain" :key="entry.id"><span class="pill">{{ auditRole(entry.recordRole) }}</span><div><strong>{{ transactionTitle(entry) }}</strong><small>发生时间 {{ displayOccurredAt(entry) }} · 记录时间 {{ new Date(entry.createdAt).toLocaleString('zh-CN') }}</small><small v-if="entry.operationGroupId">更正组 {{ entry.operationGroupId.slice(0,8) }}</small></div><b>{{ transactionAmount(entry) }}</b></article></div><button class="ghost full" @click="closeDialog">关闭</button></template>
       <template v-else-if="dialog === 'theme'">
         <span class="eyebrow">THEME COMPASS</span><h2>选择主题颜色</h2>
         <p class="modal-copy">主色和副色都可在 360° 色环上自由选择。拖动指针、输入数值或使用微调按钮，界面会即时预览。</p>
@@ -1015,7 +1111,7 @@ function toggleColorTone(event: Event) {
         <span class="eyebrow">BATCH ENTRY</span><div class="section-title"><h2>批量添加账目</h2><span class="pill">待提交 {{ pendingDrafts.length }} 笔</span></div>
         <div class="form-grid transaction-form">
           <label class="entry-type">类型<select name="draft-form-kind" v-model="draftForm.kind"><option value="expense">支出</option><option value="income">收入</option><option value="transfer">转移</option></select></label>
-          <label class="entry-date">日期<input name="draft-form-booked-at" v-model="draftForm.bookedAt" type="date" /></label>
+          <label class="entry-date">发生时间<input name="draft-form-occurred-at" v-model="draftForm.occurredAtLocal" type="datetime-local" step="1" /></label>
           <div v-if="draftForm.kind !== 'income'" class="picker-field"><span>支出账户</span><AccountPicker v-model="draftForm.sourceAccountId" :accounts="activeAccounts" placeholder="选择支出账户" search-placeholder="搜索支出账户" /></div>
           <label v-if="draftForm.kind !== 'income'" class="entry-source-amount">支出金额<div class="money-input"><input name="draft-form-source-amount" v-model="draftForm.sourceAmount" type="number" min="0" :max="currencyRules[draftForm.sourceCurrency].maxMinorUnits / 10 ** currencyRules[draftForm.sourceCurrency].fractionDigits" :step="10 ** -currencyRules[draftForm.sourceCurrency].fractionDigits" @input="syncTransferAmount('source')" /><select name="draft-form-source-currency" v-model="draftForm.sourceCurrency" @change="syncTransferAmount('source')"><option v-for="c in currencies" :key="c">{{ c }}</option></select></div></label>
           <div v-if="draftForm.kind !== 'expense'" class="picker-field"><span>收入账户</span><AccountPicker v-model="draftForm.destinationAccountId" :accounts="activeAccounts" placeholder="选择收入账户" search-placeholder="搜索收入账户" /></div>
@@ -1031,18 +1127,30 @@ function toggleColorTone(event: Event) {
           </PickerDialog>
         </div>
         <div class="actions"><button class="ghost" @click="addPendingDraft">加入待提交列表</button><button class="ghost" :disabled="!pendingDrafts.length || session.busy" @click="commitDrafts">提交暂存</button><button class="primary" :disabled="(!pendingDrafts.length && !hasUnsavedTransactionInput) || session.busy" @click="commitAllDrafts">直接提交</button></div>
-        <div v-if="pendingDrafts.length" class="pending-list"><div v-for="(draft, index) in pendingDrafts" :key="index"><span>{{ index + 1 }}. {{ { income:'收入', expense:'支出', transfer:'转移' }[draft.kind] }} · {{ draft.bookedAt }}</span><span class="pending-actions"><button @click="copyPendingDraft(index)">复制</button><button @click="removePendingDraft(index)">移除</button></span></div></div>
+        <div v-if="pendingDrafts.length" class="pending-list"><div v-for="(draft, index) in pendingDrafts" :key="index"><span>{{ index + 1 }}. {{ { income:'收入', expense:'支出', transfer:'转移' }[draft.kind] }} · {{ displayOccurredAt(draft) }}</span><span class="pending-actions"><button :disabled="index === 0" aria-label="上移暂存账目" @click="movePendingDraft(index, -1)">上移</button><button :disabled="index === pendingDrafts.length - 1" aria-label="下移暂存账目" @click="movePendingDraft(index, 1)">下移</button><button @click="copyPendingDraft(index)">复制</button><button @click="removePendingDraft(index)">移除</button></span></div></div>
       </template>
       <template v-else-if="dialog === 'discard-entry'"><span class="eyebrow">UNSAVED CHANGES</span><h2>放弃未保存的账目？</h2><p class="modal-copy">当前填写内容和待提交列表都将被清空。</p><div class="modal-actions"><button class="ghost" @click="dialog = 'transaction-entry'">继续编辑</button><button class="danger" @click="discardTransactionEntry">放弃修改</button></div></template>
       </div></Transition>
     </section>
   </div>
   </Transition>
-  <PickerDialog :open="Boolean(session.migration)" title="升级账本以支持子标签" @close="session.confirmMigration(false)">
-    <p class="modal-copy">“{{ session.migration?.migrationInfo?.name }}”包含 {{ session.migration?.migrationInfo?.tags }} 个标签、{{ session.migration?.migrationInfo?.transactions }} 条记录。现有标签全部成为根标签，金额、主标签及选择顺序不变。</p>
-    <p class="hierarchy-warning">升级到数据格式 v2 后，旧版客户端将无法打开。确认前不会写入任何数据；升级成功时会原子保存旧密文备份。请同时下载一份，以便回退。</p>
-    <button class="ghost full" @click="session.exportMigrationPreview">导出旧版 .rwbl 备份</button>
-    <div class="modal-actions"><button class="ghost" @click="session.confirmMigration(false)">取消升级</button><button class="primary" @click="session.confirmMigration(true)">确认升级</button></div>
+  <PickerDialog :open="Boolean(session.migration)" :title="migrationTimeRows.length ? '补充账目发生时间' : '升级账本数据格式'" wide @close="cancelOccurrenceMigration">
+    <p class="modal-copy">“{{ session.migration?.migrationInfo?.name }}”正在从数据格式 v{{ session.migration?.migrationInfo?.fromVersion }} 升级。金额、余额、标签和审计引用不会改变。</p>
+    <template v-if="migrationTimeRows.length">
+      <p class="hierarchy-warning">旧账目只有日期。下面按当前账目顺序生成了可编辑的建议时间；请逐条核对。只有确认全部发生时间后才能进入账本。</p>
+      <div class="migration-time-toolbar"><span>同一天内按从新到旧排列</span><button class="ghost small" @click="generateMigrationTimes">按当前顺序重新生成</button></div>
+      <div class="migration-time-list">
+        <article v-for="(row, index) in migrationTimeRows" :key="row.id">
+          <div class="migration-order"><button :disabled="index === 0 || migrationTimeRows[index - 1]?.bookedAt !== row.bookedAt" :aria-label="`上移 ${row.note || row.kind}`" @click="moveMigrationRow(index, -1)">▲</button><strong>{{ index + 1 }}</strong><button :disabled="index === migrationTimeRows.length - 1 || migrationTimeRows[index + 1]?.bookedAt !== row.bookedAt" :aria-label="`下移 ${row.note || row.kind}`" @click="moveMigrationRow(index, 1)">▼</button></div>
+          <div><strong>{{ row.kind === 'income' ? `收入至 ${row.destinationAccountName}` : row.kind === 'expense' ? `从 ${row.sourceAccountName} 支出` : `${row.sourceAccountName} → ${row.destinationAccountName}` }}</strong><small>{{ row.amount ? formatMoney(row.amount) : '' }} · {{ row.note || '无备注' }}<template v-if="row.corrected"> · 已更正</template><template v-if="row.deleted"> · 已删除</template></small></div>
+          <label>发生时间<input :name="`migration-occurred-at-${row.id}`" v-model="row.occurredAtLocal" type="datetime-local" step="1" /></label>
+        </article>
+      </div>
+    </template>
+    <p v-else class="hierarchy-warning">该账本没有需要手动补时的业务账目。系统记录将使用原操作时间，旧版标签将保持原有名称和选择顺序。</p>
+    <p class="migration-boundary">确认前不会写入数据；升级成功时会先原子保存当前密文备份。旧版客户端将无法打开升级后的账本。</p>
+    <button class="ghost full" @click="session.exportMigrationPreview">导出升级前 .rwbl 备份</button>
+    <div class="modal-actions"><button class="ghost" @click="cancelOccurrenceMigration">暂后处理并锁定</button><button class="primary" @click="confirmOccurrenceMigration">确认时间并升级</button></div>
   </PickerDialog>
   <TransitionGroup name="toast" tag="div" class="toast-stack" aria-live="polite" aria-atomic="false">
     <article v-if="pwaUpdateReady" key="pwa-update" class="toast-message toast-warning pwa-update-message">

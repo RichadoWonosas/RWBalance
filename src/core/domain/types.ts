@@ -1,6 +1,7 @@
 export const currencies = ['CNY', 'USD', 'GBP', 'JPY'] as const
 export type Currency = (typeof currencies)[number]
 export type TransactionKind = 'income' | 'expense' | 'transfer'
+export type TimePrecision = 'date' | 'second'
 export type RecordRole =
   | 'normal'
   | 'reversal'
@@ -45,6 +46,13 @@ export interface Transaction {
   primaryTagId?: string
   note: string
   bookedAt: string
+  /** Business occurrence instant. Required from schema v3 onward. */
+  occurredAt?: string
+  timePrecision?: TimePrecision
+  /** Stable operation ordering. Required from schema v3 onward. */
+  commitRevision?: number
+  commitIndex?: number
+  updatedRevision?: number
   createdAt: string
   updatedAt: string
   recordRole: RecordRole
@@ -56,7 +64,8 @@ export interface Transaction {
 export interface Ledger {
   id: string
   name: string
-  schemaVersion: 1 | 2
+  schemaVersion: 1 | 2 | 3
+  nextTransactionRevision?: number
   hierarchyChanges?: { tagId: string; previousParentId?: string; parentId?: string; changedAt: string; affectedTransactions: number; action: 'reparent' | 'delete' }[]
   createdAt: string
   updatedAt: string
@@ -82,6 +91,7 @@ export interface TransactionDraft {
   primaryTagId?: string
   note?: string
   bookedAt: string
+  occurredAt: string
 }
 
 export type BalanceMap = Record<string, Partial<Record<Currency, number>>>

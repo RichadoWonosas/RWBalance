@@ -42,6 +42,7 @@ test('login and repeated page navigation have named fields and no uncaught error
   }
   await expect(page.locator('.welcome p')).toHaveCSS('color', 'rgb(255, 255, 255)')
   await page.locator('nav button').filter({ hasText: '设置' }).click()
+  await page.getByRole('button', { name: /外观/ }).click()
   await page.locator('.theme-entry').click()
   for (const hue of [0, 60, 120, 180, 225, 270, 330]) {
     await page.getByLabel('色相角度').fill(String(hue))

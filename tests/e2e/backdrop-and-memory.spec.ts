@@ -33,6 +33,7 @@ test('appearance survives away, exit and reload; selecting locked ledgers and cr
   await page.getByLabel('确认口令').fill('test-passphrase')
   await page.getByRole('button', { name: '创建并进入' }).click()
   await page.locator('nav button').filter({ hasText: '设置' }).click()
+  await page.getByRole('button', { name: /外观/ }).click()
   await page.locator('.theme-entry').click()
   await page.getByLabel('色相角度').fill('150')
   await page.getByRole('button', { name: '保存到当前账本' }).click()

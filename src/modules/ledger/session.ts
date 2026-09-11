@@ -27,20 +27,20 @@ export const useLedgerStore = defineStore('ledger-session', () => {
   const error = ref('')
   let client: LedgerWorkerClient | undefined
   const migration = ref<Pick<LedgerWorkerResult, 'migrationInfo' | 'backupContainer' | 'backupName'>>()
-  let decideMigration: ((confirmed: boolean) => void) | undefined
-  function confirmMigration(confirmed: boolean) {
+  let decideMigration: ((decision: false | Record<string, string>) => void) | undefined
+  function confirmMigration(decision: false | Record<string, string>) {
     const resolve = decideMigration
     migration.value = undefined
     decideMigration = undefined
-    resolve?.(confirmed)
+    resolve?.(decision)
   }
   function exportMigrationPreview() {
-    if (migration.value?.backupContainer) downloadContainer(migration.value.backupContainer, migration.value.backupName ?? 'v1升级前备份')
+    if (migration.value?.backupContainer) downloadContainer(migration.value.backupContainer, migration.value.backupName ?? '升级前备份')
   }
   async function exportMigrationBackup() {
     if (!ledger.value) return
     const result = await run({ type: 'get-migration-backup', ledgerId: ledger.value.id })
-    if (result?.container) downloadContainer(result.container, result.exportName ?? 'v1升级前备份')
+    if (result?.container) downloadContainer(result.container, result.exportName ?? '升级前备份')
   }
 
   const isUnlocked = computed(() => Boolean(ledger.value))
@@ -65,10 +65,10 @@ export const useLedgerStore = defineStore('ledger-session', () => {
       let result = await worker().request(command)
       if (result.migrationInfo) {
         migration.value = result
-        const confirmed = await new Promise<boolean>(resolve => { decideMigration = resolve })
-        if (!confirmed) return undefined
+        const decision = await new Promise<false | Record<string, string>>(resolve => { decideMigration = resolve })
+        if (decision === false) return undefined
         if (command.type !== 'unlock' && command.type !== 'import' && command.type !== 'restore-recovery') throw new Error('无效的升级操作')
-        result = await worker().request({ ...command, confirmMigration: true })
+        result = await worker().request({ ...command, confirmMigration: true, migrationOccurredAt: decision })
       }
       apply(result)
       return result

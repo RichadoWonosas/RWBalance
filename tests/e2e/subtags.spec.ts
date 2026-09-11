@@ -6,8 +6,22 @@ async function seed(page: Page, legacy = false, save = true) {
     const domainPath = '/src/core/domain/ledger.ts', cryptoPath = '/src/core/security/crypto.ts', repositoryPath = '/src/core/data/indexed-db/repository.ts'
     const domain = await import(/* @vite-ignore */ domainPath), security = await import(/* @vite-ignore */ cryptoPath), repository = await import(/* @vite-ignore */ repositoryPath)
     const ledger = domain.createLedger(legacy ? '旧版迁移测试' : '子标签测试')
-    domain.addAccount(ledger, '现金', false, { CNY: 10000 })
-    if (legacy) { ledger.schemaVersion = 1; delete ledger.hierarchyChanges; ledger.transactions.forEach((tx: { explicitTagIds?: string[] }) => { delete tx.explicitTagIds }) }
+    const account = domain.addAccount(ledger, '现金', false, { CNY: 10000 })
+    if (legacy) {
+      const tag = ledger.tags.find((item: { name: string }) => item.name === '饮食')
+      domain.addTransactions(ledger, [{ kind: 'expense', sourceAccountId: account.id, sourceMoney: { currency: 'CNY', minorUnits: 100 }, selectedTagIds: [tag.id], primaryTagId: tag.id, bookedAt: '2026-09-08', occurredAt: '2026-09-08T18:00:00+08:00' }])
+      ledger.schemaVersion = 1
+      delete ledger.hierarchyChanges
+      delete ledger.nextTransactionRevision
+      ledger.transactions.forEach((tx: { explicitTagIds?: string[]; occurredAt?: string; timePrecision?: string; commitRevision?: number; commitIndex?: number; updatedRevision?: number }) => {
+        delete tx.explicitTagIds
+        delete tx.occurredAt
+        delete tx.timePrecision
+        delete tx.commitRevision
+        delete tx.commitIndex
+        delete tx.updatedRevision
+      })
+    }
     const container = await security.encryptLedger(ledger, 'test-passphrase')
     if (save) await repository.saveLedger(container, { ledgerId: ledger.id, displayName: ledger.name, normalizedName: ledger.name, containerVersion: 2, updatedAt: ledger.updatedAt })
     return { id: ledger.id, name: ledger.name, text: JSON.stringify(container) }
@@ -139,23 +153,24 @@ test('nested tag management, implicit selections, edit/correction and non-overla
 test('legacy unlock cancels safely, exports original ciphertext, upgrades and offers recovery migration', async ({ page }) => {
   const fixture = await seed(page, true)
   await unlock(page, fixture.name)
-  const migration = page.getByRole('dialog', { name: '升级账本以支持子标签' })
+  const migration = page.getByRole('dialog', { name: '补充账目发生时间' })
   await expect(migration).toBeVisible()
-  await migration.getByRole('button', { name: '取消升级', exact: true }).click()
+  await migration.getByRole('button', { name: '暂后处理并锁定', exact: true }).click()
   await expect(page.locator('.app-shell')).toHaveCount(0)
   await page.getByRole('button', { name: '解锁账本', exact: true }).click()
   const download = page.waitForEvent('download')
-  await migration.getByRole('button', { name: '导出旧版 .rwbl 备份' }).click()
+  await migration.getByRole('button', { name: '导出升级前 .rwbl 备份' }).click()
   expect((await download).suggestedFilename()).toContain('v1升级前备份.rwbl')
-  await migration.getByRole('button', { name: '确认升级', exact: true }).click()
+  await migration.getByRole('button', { name: '确认时间并升级', exact: true }).click()
   await expect(page.locator('.welcome')).toBeVisible()
   await page.locator('nav button').filter({ hasText: '设置' }).click()
-  await expect(page.getByRole('button', { name: '导出 v1 升级前备份' })).toBeVisible()
+  await page.getByRole('button', { name: /备份/ }).click()
+  await expect(page.getByRole('button', { name: '导出升级前备份' })).toBeVisible()
   await page.getByRole('button', { name: '恢复上一版本', exact: true }).click()
   await page.locator('[name="recovery-secret"]').fill('test-passphrase')
   await page.getByRole('button', { name: '验证并恢复', exact: true }).click()
   await expect(migration).toBeVisible()
-  await migration.getByRole('button', { name: '确认升级', exact: true }).click()
+  await migration.getByRole('button', { name: '确认时间并升级', exact: true }).click()
   await expect(migration).not.toBeVisible()
   await page.getByRole('button', { name: /退出/ }).click()
   await expect(page.locator('.app-shell')).not.toBeVisible()
@@ -170,9 +185,9 @@ test('legacy file import uses the migration gate and temporary tag cancellation 
   await page.locator('input[type="file"]').setInputFiles({ name: 'legacy.rwbl', mimeType: 'application/json', buffer: Buffer.from(fixture.text) })
   await page.getByLabel('文件访问口令', { exact: true }).fill('test-passphrase')
   await page.getByRole('button', { name: /验证并导入/ }).click()
-  const migration = page.getByRole('dialog', { name: '升级账本以支持子标签' })
+  const migration = page.getByRole('dialog', { name: '补充账目发生时间' })
   await expect(migration).toBeVisible()
-  await migration.getByRole('button', { name: '确认升级', exact: true }).click()
+  await migration.getByRole('button', { name: '确认时间并升级', exact: true }).click()
   await expect(page.locator('.ledger-card')).toContainText(fixture.name)
   await unlock(page, fixture.name)
   await page.getByRole('button', { name: /记录一笔/ }).click()

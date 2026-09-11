@@ -18,6 +18,16 @@ const primaryGrouping = ref<'exact' | 'root'>('exact')
 const exportOpen = ref(false)
 const redactExport = ref(true)
 const reportCanvas = ref<HTMLCanvasElement>()
+const trendHoverIndex = ref<number | null>(null)
+const exchangeHoverIndex = ref<number | null>(null)
+const donutHoverId = ref<string | null>(null)
+
+const CHART_WIDTH = 600
+const CHART_HEIGHT = 240
+const PLOT_LEFT = 58
+const PLOT_RIGHT = 590
+const PLOT_TOP = 18
+const PLOT_BOTTOM = 200
 
 function isoDaysAgo(days: number) { const date = new Date(); date.setHours(0, 0, 0, 0); date.setDate(date.getDate() - days); return date.toISOString().slice(0, 10) }
 const range = computed(() => {
@@ -55,9 +65,21 @@ const trend = computed(() => {
   return [...rows.values()].sort((a, b) => a.date.localeCompare(b.date))
 })
 const trendMax = computed(() => Math.max(1, ...trend.value.flatMap((row) => [row.income, row.expense])))
-const plotX = (index: number, count: number) => count < 2 ? 57 : 16 + index / (count - 1) * 82
-const trendY = (kind: 'income' | 'expense', value: number) => 88 - value / trendMax.value * 80
+const hoveredTrendRow = computed(() => trendHoverIndex.value === null ? undefined : trend.value[trendHoverIndex.value])
+const plotX = (index: number, count: number) => count < 2 ? (PLOT_LEFT + PLOT_RIGHT) / 2 : PLOT_LEFT + index / (count - 1) * (PLOT_RIGHT - PLOT_LEFT)
+const trendY = (_kind: 'income' | 'expense', value: number) => PLOT_BOTTOM - value / trendMax.value * (PLOT_BOTTOM - PLOT_TOP)
 function trendPoints(kind: 'income' | 'expense') { return trend.value.map((row, index) => `${plotX(index, trend.value.length)},${trendY(kind, row[kind])}`).join(' ') }
+function nearestChartIndex(event: PointerEvent, count: number) {
+  if (!count) return null
+  const rect = (event.currentTarget as SVGSVGElement).getBoundingClientRect()
+  const chartX = (event.clientX - rect.left) / rect.width * CHART_WIDTH
+  const ratio = Math.max(0, Math.min(1, (chartX - PLOT_LEFT) / (PLOT_RIGHT - PLOT_LEFT)))
+  return count === 1 ? 0 : Math.round(ratio * (count - 1))
+}
+function chartTooltipLeft(index: number, count: number) {
+  const percent = plotX(index, count) / CHART_WIDTH * 100
+  return `${Math.max(13, Math.min(87, percent))}%`
+}
 function compactAmount(value: number, currency: Currency) {
   const major = value / 10 ** currencyRules[currency].fractionDigits
   return new Intl.NumberFormat('zh-CN', { notation: 'compact', maximumFractionDigits: 1 }).format(major)
@@ -77,12 +99,35 @@ const tagTotals = computed(() => {
   const rank = (map: Map<string, number>) => [...map].map(([tagId, value]) => ({ tagId, name: implicitTagName(tagId) ?? (tagPath(props.ledger.tags, tagId) || '系统标签'), value })).sort((a, b) => b.value - a.value)
   return { primary: rank(primary), included: rank(included) }
 })
-const donutGradient = computed(() => {
-  const rows = tagTotals.value.primary; const total = rows.reduce((sum, row) => sum + row.value, 0)
-  if (!total) return 'conic-gradient(var(--color-neutral-surface) 0 100%)'
-  let cursor = 0
-  return `conic-gradient(${rows.map((row, index) => { const start = cursor; cursor += row.value / total * 100; return `hsl(${(props.primaryHue + index * 37) % 360} 68% 52%) ${start}% ${cursor}%` }).join(',')})`
+function polarPoint(radius: number, angle: number) {
+  return { x: 60 + radius * Math.cos(angle), y: 60 + radius * Math.sin(angle) }
+}
+function donutPath(start: number, end: number) {
+  const outerRadius = 42
+  const innerRadius = 25
+  const sweep = end - start
+  if (sweep >= Math.PI * 2 - 0.0001) {
+    return `M 60 ${60 - outerRadius} A ${outerRadius} ${outerRadius} 0 1 1 60 ${60 + outerRadius} A ${outerRadius} ${outerRadius} 0 1 1 60 ${60 - outerRadius} M 60 ${60 - innerRadius} A ${innerRadius} ${innerRadius} 0 1 0 60 ${60 + innerRadius} A ${innerRadius} ${innerRadius} 0 1 0 60 ${60 - innerRadius}`
+  }
+  const outerStart = polarPoint(outerRadius, start)
+  const outerEnd = polarPoint(outerRadius, end)
+  const innerEnd = polarPoint(innerRadius, end)
+  const innerStart = polarPoint(innerRadius, start)
+  const largeArc = sweep > Math.PI ? 1 : 0
+  return `M ${outerStart.x} ${outerStart.y} A ${outerRadius} ${outerRadius} 0 ${largeArc} 1 ${outerEnd.x} ${outerEnd.y} L ${innerEnd.x} ${innerEnd.y} A ${innerRadius} ${innerRadius} 0 ${largeArc} 0 ${innerStart.x} ${innerStart.y} Z`
+}
+const donutSlices = computed(() => {
+  const rows = tagTotals.value.primary
+  const total = rows.reduce((sum, row) => sum + row.value, 0)
+  let cursor = -Math.PI / 2
+  return rows.map((row, index) => {
+    const start = cursor
+    const ratio = total ? row.value / total : 0
+    cursor += ratio * Math.PI * 2
+    return { ...row, percent: ratio * 100, path: donutPath(start, cursor), color: `hsl(${(props.primaryHue + index * 37) % 360} var(--chart-segment-saturation) var(--chart-segment-lightness))` }
+  })
 })
+const hoveredDonutSlice = computed(() => donutSlices.value.find((slice) => slice.tagId === donutHoverId.value))
 const exchangeRows = computed(() => transactions.value.filter((tx) => tx.kind === 'transfer' && tx.sourceMoney && tx.destinationMoney && tx.sourceMoney.currency !== tx.destinationMoney.currency && tx.sourceMoney.minorUnits > 0).map((tx) => ({
   id: tx.id, date: tx.bookedAt, pair: `${tx.sourceMoney!.currency}/${tx.destinationMoney!.currency}`,
   expense: tx.sourceMoney!, income: tx.destinationMoney!, primaryLabel: '换汇',
@@ -94,6 +139,7 @@ const exchangePairs = computed(() => [...new Set(exchangeRows.value.map((row) =>
 const exchangePair = ref('')
 watch(exchangePairs, (pairs) => { if (!pairs.includes(exchangePair.value)) exchangePair.value = pairs[0] ?? '' }, { immediate: true })
 const selectedExchange = computed(() => exchangeRows.value.filter((row) => row.pair === exchangePair.value))
+const hoveredExchangeRow = computed(() => exchangeHoverIndex.value === null ? undefined : selectedExchange.value[exchangeHoverIndex.value])
 const exchangeBounds = computed(() => {
   const values = selectedExchange.value.map((row) => row.rate)
   return { min: Math.min(...values), max: Math.max(...values) }
@@ -104,7 +150,7 @@ const exchangePoints = computed(() => {
 })
 function exchangeY(rate: number) {
   const spread = exchangeBounds.value.max - exchangeBounds.value.min
-  return spread <= Number.EPSILON ? 48 : 88 - (rate - exchangeBounds.value.min) / spread * 80
+  return spread <= Number.EPSILON ? (PLOT_TOP + PLOT_BOTTOM) / 2 : PLOT_BOTTOM - (rate - exchangeBounds.value.min) / spread * (PLOT_BOTTOM - PLOT_TOP)
 }
 function compactRate(value: number) { return Number.isFinite(value) ? new Intl.NumberFormat('zh-CN', { maximumSignificantDigits: 4 }).format(value) : '—' }
 
@@ -156,10 +202,26 @@ async function savePng() { await drawReport(); reportCanvas.value?.toBlob((blob)
   </div>
   <section class="surface"><div class="section-title"><div><span class="eyebrow">ACCOUNT BALANCES</span><h3>总体余额</h3></div><select name="chart-currency" aria-label="统计币种" v-model="chartCurrency" class="compact-select"><option v-for="currency in currencies" :key="currency">{{ currency }}</option></select></div><div class="bar-chart"><button v-for="row in accountBars" :key="row.account.id" @click="emit('drill',{ accountId:row.account.id,currency:chartCurrency })"><span>{{ row.account.name }}</span><i :style="{ width:`${row.value / maxAccountBalance * 100}%` }"></i><b>{{ formatMinorUnits(row.value, chartCurrency) }}</b></button></div><details><summary>查看等价数据表</summary><table><tbody><tr v-for="row in accountBars" :key="row.account.id"><th>{{ row.account.name }}</th><td>{{ formatMinorUnits(row.value, chartCurrency) }}</td></tr></tbody></table></details></section>
   <div class="analytics-grid">
-    <section class="surface"><span class="eyebrow">CASH FLOW</span><h3>收支趋势 · {{ chartCurrency }}</h3><svg class="line-chart" viewBox="0 0 100 100" role="img" aria-label="收入与支出趋势图"><g class="chart-axis"><line class="grid" x1="16" y1="48" x2="98" y2="48"/><line x1="16" y1="8" x2="16" y2="88"/><line x1="16" y1="88" x2="98" y2="88"/><text x="14" y="10" text-anchor="end">{{ compactAmount(trendMax, chartCurrency) }}</text><text x="14" y="89" text-anchor="end">0</text><text x="16" y="97">{{ range.from.slice(5) }}</text><text x="98" y="97" text-anchor="end">{{ range.to.slice(5) }}</text></g><polyline class="income-line" :points="trendPoints('income')"/><polyline class="expense-line" :points="trendPoints('expense')"/><circle v-for="(row,index) in trend" :key="`income-${row.date}`" class="data-point income-point" :cx="plotX(index,trend.length)" :cy="trendY('income',row.income)" r="1.35"/><circle v-for="(row,index) in trend" :key="`expense-${row.date}`" class="data-point expense-point" :cx="plotX(index,trend.length)" :cy="trendY('expense',row.expense)" r="1.35"/></svg><div class="chart-legend"><span class="income-dot">收入</span><span class="expense-dot">支出</span></div><details><summary>查看等价数据表</summary><table><thead><tr><th>日期</th><th>收入</th><th>支出</th></tr></thead><tbody><tr v-for="row in trend" :key="row.date"><td>{{ row.date }}</td><td>{{ formatMinorUnits(row.income,chartCurrency) }}</td><td>{{ formatMinorUnits(row.expense,chartCurrency) }}</td></tr></tbody></table></details></section>
-    <section class="surface"><span class="eyebrow">PRIMARY TAGS</span><h3>支出类型圆环图 · {{ chartCurrency }}</h3><label>主标签统计口径<select name="primary-grouping" v-model="primaryGrouping"><option value="exact">精确主标签</option><option value="root">按根级祖先汇总</option></select></label><p class="field-help">每笔支出仅计入一个扇区，父子标签不重复计费。</p><div class="donut-layout"><div class="donut" :style="{ background:donutGradient }"><span>{{ tagTotals.primary.length }} 类</span></div><ol><li v-for="row in tagTotals.primary" :key="row.tagId"><button @click="drillTag(row.tagId, 'primary')">{{ row.name }}</button><b>{{ formatMinorUnits(row.value,chartCurrency) }}</b></li></ol></div><details><summary>查看等价数据表</summary><table><tbody><tr v-for="row in tagTotals.primary" :key="row.tagId"><th>{{ row.name }}</th><td>{{ formatMinorUnits(row.value,chartCurrency) }}</td></tr></tbody></table></details></section>
+    <section class="surface">
+      <span class="eyebrow">CASH FLOW</span><h3>收支趋势 · {{ chartCurrency }}</h3>
+      <div class="chart-stage">
+        <svg class="line-chart" :viewBox="`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`" role="img" aria-label="收入与支出趋势图" @pointermove="trendHoverIndex = nearestChartIndex($event, trend.length)" @pointerleave="trendHoverIndex = null">
+          <g class="chart-axis"><line class="grid" :x1="PLOT_LEFT" :y1="(PLOT_TOP + PLOT_BOTTOM) / 2" :x2="PLOT_RIGHT" :y2="(PLOT_TOP + PLOT_BOTTOM) / 2"/><line :x1="PLOT_LEFT" :y1="PLOT_TOP" :x2="PLOT_LEFT" :y2="PLOT_BOTTOM"/><line :x1="PLOT_LEFT" :y1="PLOT_BOTTOM" :x2="PLOT_RIGHT" :y2="PLOT_BOTTOM"/><text :x="PLOT_LEFT - 8" :y="PLOT_TOP + 4" text-anchor="end">{{ compactAmount(trendMax, chartCurrency) }}</text><text :x="PLOT_LEFT - 8" :y="PLOT_BOTTOM + 4" text-anchor="end">0</text><text :x="PLOT_LEFT" :y="PLOT_BOTTOM + 25">{{ range.from.slice(5) }}</text><text :x="PLOT_RIGHT" :y="PLOT_BOTTOM + 25" text-anchor="end">{{ range.to.slice(5) }}</text></g>
+          <line v-if="trendHoverIndex !== null" class="hover-guide" :x1="plotX(trendHoverIndex, trend.length)" :x2="plotX(trendHoverIndex, trend.length)" :y1="PLOT_TOP" :y2="PLOT_BOTTOM"/>
+          <polyline class="income-line" :points="trendPoints('income')"/><polyline class="expense-line" :points="trendPoints('expense')"/>
+          <circle v-for="(row,index) in trend" :key="`income-${row.date}`" class="data-point income-point" :class="{ active: trendHoverIndex === index }" :cx="plotX(index,trend.length)" :cy="trendY('income',row.income)" r="4"/><circle v-for="(row,index) in trend" :key="`expense-${row.date}`" class="data-point expense-point" :class="{ active: trendHoverIndex === index }" :cx="plotX(index,trend.length)" :cy="trendY('expense',row.expense)" r="4"/>
+        </svg>
+        <div v-if="trendHoverIndex !== null && hoveredTrendRow" class="chart-tooltip" :style="{ left: chartTooltipLeft(trendHoverIndex, trend.length) }"><strong>{{ hoveredTrendRow.date }}</strong><span class="income-text">收入 {{ formatMinorUnits(hoveredTrendRow.income, chartCurrency) }}</span><span class="expense-text">支出 {{ formatMinorUnits(hoveredTrendRow.expense, chartCurrency) }}</span></div>
+      </div>
+      <div class="chart-legend"><span class="income-dot">收入</span><span class="expense-dot">支出</span></div><details><summary>查看等价数据表</summary><table><thead><tr><th>日期</th><th>收入</th><th>支出</th></tr></thead><tbody><tr v-for="row in trend" :key="row.date"><td>{{ row.date }}</td><td>{{ formatMinorUnits(row.income,chartCurrency) }}</td><td>{{ formatMinorUnits(row.expense,chartCurrency) }}</td></tr></tbody></table></details>
+    </section>
+    <section class="surface">
+      <span class="eyebrow">PRIMARY TAGS</span><h3>支出类型圆环图 · {{ chartCurrency }}</h3><label>主标签统计口径<select name="primary-grouping" v-model="primaryGrouping"><option value="exact">精确主标签</option><option value="root">按根级祖先汇总</option></select></label><p class="field-help">每笔支出仅计入一个扇区，父子标签不重复计费。</p>
+      <div class="donut-layout"><div class="donut-shell"><svg class="donut-chart" viewBox="0 0 120 120" role="img" aria-label="主标签支出比例图"><circle v-if="!donutSlices.length" class="donut-empty" cx="60" cy="60" r="33.5"/><path v-for="slice in donutSlices" :key="slice.tagId" class="donut-slice" :class="{ hovered: donutHoverId === slice.tagId }" :d="slice.path" :fill="slice.color" fill-rule="evenodd" tabindex="0" @mouseenter="donutHoverId = slice.tagId" @mouseleave="donutHoverId = null" @focus="donutHoverId = slice.tagId" @blur="donutHoverId = null"><title>{{ slice.name }}：{{ slice.percent.toFixed(1) }}%</title></path><text class="donut-count" x="60" y="64" text-anchor="middle">{{ tagTotals.primary.length }} 类</text></svg><div v-if="hoveredDonutSlice" class="chart-tooltip donut-tooltip"><strong>{{ hoveredDonutSlice.name }}</strong><span>{{ formatMinorUnits(hoveredDonutSlice.value, chartCurrency) }}</span><span>{{ hoveredDonutSlice.percent.toFixed(1) }}%</span></div></div><ol><li v-for="row in tagTotals.primary" :key="row.tagId" @mouseenter="donutHoverId = row.tagId" @mouseleave="donutHoverId = null"><button @focus="donutHoverId = row.tagId" @blur="donutHoverId = null" @click="drillTag(row.tagId, 'primary')">{{ row.name }}</button><b>{{ formatMinorUnits(row.value,chartCurrency) }}</b></li></ol></div>
+      <details><summary>查看等价数据表</summary><table><tbody><tr v-for="row in tagTotals.primary" :key="row.tagId"><th>{{ row.name }}</th><td>{{ formatMinorUnits(row.value,chartCurrency) }}</td></tr></tbody></table></details>
+    </section>
   </div>
   <div class="analytics-grid"><section v-for="mode in (['primary','included'] as const)" :key="mode" class="surface"><span class="eyebrow">TAG RANKING</span><h3>{{ mode === 'primary' ? (primaryGrouping === 'root' ? '主标签按根级汇总' : '精确主标签支出排行') : '包含子标签支出排行（跨标签不可相加）' }}</h3><ol class="rank-list"><li v-for="row in tagTotals[mode]" :key="row.tagId"><button @click="drillTag(row.tagId, mode)">{{ row.name }}</button><i :style="{ width:`${row.value / Math.max(1,...tagTotals[mode].map(item=>item.value)) * 100}%` }"></i><b>{{ formatMinorUnits(row.value,chartCurrency) }}</b></li><li v-if="!tagTotals[mode].length">暂无支出</li></ol></section></div>
-  <section class="surface"><div class="section-title"><div><span class="eyebrow">EXCHANGE RATE</span><h3>银行换汇隐含汇率</h3></div><select name="exchange-pair" aria-label="换汇币种对" v-model="exchangePair" class="compact-select"><option v-for="pair in exchangePairs" :key="pair">{{ pair }}</option></select></div><svg v-if="selectedExchange.length" class="line-chart exchange" viewBox="0 0 100 100" role="img" :aria-label="`${exchangePair} 隐含汇率趋势图`"><g class="chart-axis"><line class="grid" x1="16" y1="48" x2="98" y2="48"/><line x1="16" y1="8" x2="16" y2="88"/><line x1="16" y1="88" x2="98" y2="88"/><text x="14" y="10" text-anchor="end">{{ compactRate(exchangeBounds.max) }}</text><text x="14" y="89" text-anchor="end">{{ compactRate(exchangeBounds.min) }}</text><text x="16" y="97">{{ selectedExchange[0]?.date.slice(5) }}</text><text x="98" y="97" text-anchor="end">{{ selectedExchange.at(-1)?.date.slice(5) }}</text></g><polyline :points="exchangePoints"/><circle v-for="(row,index) in selectedExchange" :key="row.id" class="data-point exchange-point" :cx="plotX(index,selectedExchange.length)" :cy="exchangeY(row.rate)" r="1.35"/></svg><div v-else class="empty compact">所选范围内没有跨币种转移</div><details v-if="selectedExchange.length"><summary>查看换汇资金流与等价数据</summary><table><thead><tr><th>日期</th><th>方向</th><th>支出（隐含标签）</th><th>收入（隐含标签）</th><th>主标签</th><th>隐含汇率</th></tr></thead><tbody><tr v-for="row in selectedExchange" :key="row.id"><td>{{ row.date }}</td><td>{{ row.pair }}</td><td>{{ formatMinorUnits(row.expense.minorUnits, row.expense.currency) }} · {{ row.expenseLabel }}</td><td>{{ formatMinorUnits(row.income.minorUnits, row.income.currency) }} · {{ row.incomeLabel }}</td><td>{{ row.primaryLabel }}</td><td>{{ row.rate.toFixed(8) }}</td></tr></tbody></table></details></section>
+  <section class="surface"><div class="section-title"><div><span class="eyebrow">EXCHANGE RATE</span><h3>银行换汇隐含汇率</h3></div><select name="exchange-pair" aria-label="换汇币种对" v-model="exchangePair" class="compact-select"><option v-for="pair in exchangePairs" :key="pair">{{ pair }}</option></select></div><div v-if="selectedExchange.length" class="chart-stage"><svg class="line-chart exchange" :viewBox="`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`" role="img" :aria-label="`${exchangePair} 隐含汇率趋势图`" @pointermove="exchangeHoverIndex = nearestChartIndex($event, selectedExchange.length)" @pointerleave="exchangeHoverIndex = null"><g class="chart-axis"><line class="grid" :x1="PLOT_LEFT" :y1="(PLOT_TOP + PLOT_BOTTOM) / 2" :x2="PLOT_RIGHT" :y2="(PLOT_TOP + PLOT_BOTTOM) / 2"/><line :x1="PLOT_LEFT" :y1="PLOT_TOP" :x2="PLOT_LEFT" :y2="PLOT_BOTTOM"/><line :x1="PLOT_LEFT" :y1="PLOT_BOTTOM" :x2="PLOT_RIGHT" :y2="PLOT_BOTTOM"/><text :x="PLOT_LEFT - 8" :y="PLOT_TOP + 4" text-anchor="end">{{ compactRate(exchangeBounds.max) }}</text><text :x="PLOT_LEFT - 8" :y="PLOT_BOTTOM + 4" text-anchor="end">{{ compactRate(exchangeBounds.min) }}</text><text :x="PLOT_LEFT" :y="PLOT_BOTTOM + 25">{{ selectedExchange[0]?.date.slice(5) }}</text><text :x="PLOT_RIGHT" :y="PLOT_BOTTOM + 25" text-anchor="end">{{ selectedExchange.at(-1)?.date.slice(5) }}</text></g><line v-if="exchangeHoverIndex !== null" class="hover-guide" :x1="plotX(exchangeHoverIndex, selectedExchange.length)" :x2="plotX(exchangeHoverIndex, selectedExchange.length)" :y1="PLOT_TOP" :y2="PLOT_BOTTOM"/><polyline :points="exchangePoints"/><circle v-for="(row,index) in selectedExchange" :key="row.id" class="data-point exchange-point" :class="{ active: exchangeHoverIndex === index }" :cx="plotX(index,selectedExchange.length)" :cy="exchangeY(row.rate)" r="4"/></svg><div v-if="exchangeHoverIndex !== null && hoveredExchangeRow" class="chart-tooltip" :style="{ left: chartTooltipLeft(exchangeHoverIndex, selectedExchange.length) }"><strong>{{ hoveredExchangeRow.date }} · {{ hoveredExchangeRow.pair }}</strong><span>汇率 {{ hoveredExchangeRow.rate.toFixed(8) }}</span><span>{{ formatMinorUnits(hoveredExchangeRow.expense.minorUnits, hoveredExchangeRow.expense.currency) }} → {{ formatMinorUnits(hoveredExchangeRow.income.minorUnits, hoveredExchangeRow.income.currency) }}</span></div></div><div v-else class="empty compact">所选范围内没有跨币种转移</div><details v-if="selectedExchange.length"><summary>查看换汇资金流与等价数据</summary><table><thead><tr><th>日期</th><th>方向</th><th>支出（隐含标签）</th><th>收入（隐含标签）</th><th>主标签</th><th>隐含汇率</th></tr></thead><tbody><tr v-for="row in selectedExchange" :key="row.id"><td>{{ row.date }}</td><td>{{ row.pair }}</td><td>{{ formatMinorUnits(row.expense.minorUnits, row.expense.currency) }} · {{ row.expenseLabel }}</td><td>{{ formatMinorUnits(row.income.minorUnits, row.income.currency) }} · {{ row.incomeLabel }}</td><td>{{ row.primaryLabel }}</td><td>{{ row.rate.toFixed(8) }}</td></tr></tbody></table></details></section>
   <Transition name="modal-motion"><div v-if="exportOpen" class="modal-backdrop" v-backdrop-dismiss="() => { exportOpen = false }"><section class="modal export-modal"><button class="modal-close" @click="exportOpen=false">×</button><span class="eyebrow">EXPORT PREVIEW</span><h2>统计图片预览</h2><label class="privacy-toggle"><input name="redact-export" v-model="redactExport" type="checkbox" />启用关键信息脱敏（默认）</label><p v-if="!redactExport" class="export-warning">警告：图片将包含真实账本名称、账户、标签、金额和日期。</p><div class="canvas-preview"><canvas ref="reportCanvas"></canvas></div><div class="modal-actions"><button class="ghost" @click="exportOpen=false">取消</button><button class="primary" @click="savePng">保存 PNG</button></div></section></div></Transition>
 </template>

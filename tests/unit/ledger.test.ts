@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { addAccount, addTag, addTransactions, addTransactionsWithTags, correctTransaction, createLedger, defaultTagNames, deleteAccount, effectiveTransaction, isTransactionDeleted, normalizeName, projectBalances, resolveAndDeleteTag, restoreAccount, restoreTransaction, reverseTransaction, transactionAuditChain, updateAccount, updateTransactionTags, validateLedgerData } from '../../src/core/domain/ledger'
+import { addAccount, addTag, addTransactions, addTransactionsWithTags, correctTransaction, createLedger, defaultTagNames, deleteAccount, effectiveTransaction, isTransactionDeleted, migrateLedgerToV3, normalizeName, occurrenceMigrationEntries, projectBalances, resolveAndDeleteTag, restoreAccount, restoreTransaction, reverseTransaction, transactionAuditChain, updateAccount, updateTransactionTags, validateLedgerData } from '../../src/core/domain/ledger'
 import { decodeAppearance, encodeAppearance, normalizeHue, profileForHue } from '../../src/core/domain/theme'
 import { currencyRules, toMinorUnits } from '../../src/core/domain/money'
 
@@ -33,7 +33,7 @@ describe('ledger domain', () => {
     const account = addAccount(ledger, '现金', false, { CNY: 10_000 })
     const first = ledger.tags.find((tag) => tag.name === '饮食')!
     const second = ledger.tags.find((tag) => tag.name === '生活')!
-    const [transaction] = addTransactions(ledger, [{ kind: 'expense', sourceAccountId: account.id, sourceMoney: { currency: 'CNY', minorUnits: 1_000 }, selectedTagIds: [first.id], primaryTagId: first.id, bookedAt: '2026-09-07' }])
+    const [transaction] = addTransactions(ledger, [{ kind: 'expense', sourceAccountId: account.id, sourceMoney: { currency: 'CNY', minorUnits: 1_000 }, selectedTagIds: [first.id], primaryTagId: first.id, bookedAt: '2026-09-07', occurredAt: '2026-09-07T12:00:00Z' }])
     const count = ledger.transactions.length
     updateTransactionTags(ledger, transaction!.id, [second.id, first.id], second.id)
     expect(ledger.transactions).toHaveLength(count)
@@ -44,24 +44,25 @@ describe('ledger domain', () => {
     const ledger = createLedger('连续更正')
     const account = addAccount(ledger, '现金', false, { CNY: 10_000 })
     const tag = ledger.tags.find((item) => item.name === '饮食')!
-    const [root] = addTransactions(ledger, [{ kind: 'expense', sourceAccountId: account.id, sourceMoney: { currency: 'CNY', minorUnits: 8_000 }, selectedTagIds: [tag.id], primaryTagId: tag.id, bookedAt: '2026-09-01' }])
-    const first = correctTransaction(ledger, root!.id, { kind: 'expense', sourceAccountId: account.id, sourceMoney: { currency: 'CNY', minorUnits: 6_000 }, selectedTagIds: [tag.id], primaryTagId: tag.id, bookedAt: '2099-01-01' })
+    const [root] = addTransactions(ledger, [{ kind: 'expense', sourceAccountId: account.id, sourceMoney: { currency: 'CNY', minorUnits: 8_000 }, selectedTagIds: [tag.id], primaryTagId: tag.id, bookedAt: '2026-09-01', occurredAt: '2026-09-01T12:00:00Z' }])
+    const first = correctTransaction(ledger, root!.id, { kind: 'expense', sourceAccountId: account.id, sourceMoney: { currency: 'CNY', minorUnits: 6_000 }, selectedTagIds: [tag.id], primaryTagId: tag.id, bookedAt: '2099-01-01', occurredAt: '2099-01-01T12:00:00Z' })
     expect(first.bookedAt).toBe('2026-09-01')
+    expect(first.occurredAt).toBe(root!.occurredAt)
     expect(projectBalances(ledger)[account.id]?.CNY).toBe(4_000)
-    const second = correctTransaction(ledger, first.id, { kind: 'expense', sourceAccountId: account.id, sourceMoney: { currency: 'CNY', minorUnits: 7_000 }, selectedTagIds: [tag.id], primaryTagId: tag.id, bookedAt: '2099-01-01' })
+    const second = correctTransaction(ledger, first.id, { kind: 'expense', sourceAccountId: account.id, sourceMoney: { currency: 'CNY', minorUnits: 7_000 }, selectedTagIds: [tag.id], primaryTagId: tag.id, bookedAt: '2099-01-01', occurredAt: '2099-01-01T12:00:00Z' })
     expect(projectBalances(ledger)[account.id]?.CNY).toBe(3_000)
     expect(effectiveTransaction(ledger, root!.id)?.id).toBe(second.id)
     expect(isTransactionDeleted(ledger, root!.id)).toBe(false)
     expect(transactionAuditChain(ledger, root!.id)).toHaveLength(5)
-    expect(() => correctTransaction(ledger, second.id, { kind: 'expense', sourceAccountId: account.id, sourceMoney: { currency: 'CNY', minorUnits: 11_000 }, selectedTagIds: [tag.id], primaryTagId: tag.id, bookedAt: '2026-09-01' })).toThrow('余额不足')
+    expect(() => correctTransaction(ledger, second.id, { kind: 'expense', sourceAccountId: account.id, sourceMoney: { currency: 'CNY', minorUnits: 11_000 }, selectedTagIds: [tag.id], primaryTagId: tag.id, bookedAt: '2026-09-01', occurredAt: '2026-09-01T12:00:00Z' })).toThrow('余额不足')
   })
 
   it('deletes and restores the latest corrected value', () => {
     const ledger = createLedger('更正后删除')
     const account = addAccount(ledger, '现金', false, { CNY: 10_000 })
     const tag = ledger.tags[1]!
-    const [root] = addTransactions(ledger, [{ kind: 'expense', sourceAccountId: account.id, sourceMoney: { currency: 'CNY', minorUnits: 2_000 }, selectedTagIds: [tag.id], primaryTagId: tag.id, bookedAt: '2026-09-01' }])
-    const replacement = correctTransaction(ledger, root!.id, { kind: 'expense', sourceAccountId: account.id, sourceMoney: { currency: 'CNY', minorUnits: 3_000 }, selectedTagIds: [tag.id], primaryTagId: tag.id, bookedAt: '2026-09-01' })
+    const [root] = addTransactions(ledger, [{ kind: 'expense', sourceAccountId: account.id, sourceMoney: { currency: 'CNY', minorUnits: 2_000 }, selectedTagIds: [tag.id], primaryTagId: tag.id, bookedAt: '2026-09-01', occurredAt: '2026-09-01T12:00:00Z' }])
+    const replacement = correctTransaction(ledger, root!.id, { kind: 'expense', sourceAccountId: account.id, sourceMoney: { currency: 'CNY', minorUnits: 3_000 }, selectedTagIds: [tag.id], primaryTagId: tag.id, bookedAt: '2026-09-01', occurredAt: '2026-09-01T12:00:00Z' })
     reverseTransaction(ledger, replacement.id)
     expect(projectBalances(ledger)[account.id]?.CNY).toBe(10_000)
     expect(isTransactionDeleted(ledger, root!.id)).toBe(true)
@@ -100,9 +101,49 @@ describe('ledger domain', () => {
     const before = ledger.transactions.length
     expect(() => addTransactions(ledger, [{
       kind: 'expense', sourceAccountId: account.id, sourceMoney: { currency: 'CNY', minorUnits: 1_001 },
-      selectedTagIds: [tag.id], primaryTagId: tag.id, bookedAt: '2026-09-05',
+      selectedTagIds: [tag.id], primaryTagId: tag.id, bookedAt: '2026-09-05', occurredAt: '2026-09-05T12:00:00Z',
     }])).toThrow('余额不足')
     expect(ledger.transactions).toHaveLength(before)
+  })
+
+  it('persists one stable revision and the visible order for an atomic batch', () => {
+    const ledger = createLedger('批量顺序')
+    const account = addAccount(ledger, '现金', false, { CNY: 1_000 })
+    const tag = ledger.tags[0]!
+    const drafts = ['20:00:00', '19:00:00', '18:00:00'].map((time, index) => ({
+      kind: 'expense' as const,
+      sourceAccountId: account.id,
+      sourceMoney: { currency: 'CNY' as const, minorUnits: index + 1 },
+      selectedTagIds: [tag.id], primaryTagId: tag.id, note: `顺序 ${index + 1}`,
+      bookedAt: '2026-09-11', occurredAt: `2026-09-11T${time}+08:00`,
+    }))
+    const transactions = addTransactions(ledger, drafts)
+    expect(new Set(transactions.map((transaction) => transaction.createdAt))).toHaveLength(1)
+    expect(new Set(transactions.map((transaction) => transaction.commitRevision))).toHaveLength(1)
+    expect(transactions.map((transaction) => transaction.commitIndex)).toEqual([0, 1, 2])
+    expect(transactions.map((transaction) => transaction.occurredAt)).toEqual(drafts.map((draft) => draft.occurredAt))
+    validateLedgerData(ledger)
+  })
+
+  it('forces legacy user records to receive confirmed occurrence times before v3 migration', () => {
+    const current = createLedger('补时迁移')
+    const account = addAccount(current, '现金', false, { CNY: 1_000 })
+    const tag = current.tags[0]!
+    const [root] = addTransactions(current, [{ kind: 'expense', sourceAccountId: account.id, sourceMoney: { currency: 'CNY', minorUnits: 100 }, selectedTagIds: [tag.id], primaryTagId: tag.id, bookedAt: '2026-09-10', occurredAt: '2026-09-10T18:30:00+08:00' }])
+    const legacy = structuredClone(current)
+    legacy.schemaVersion = 2
+    delete legacy.nextTransactionRevision
+    for (const transaction of legacy.transactions) {
+      delete transaction.occurredAt; delete transaction.timePrecision; delete transaction.commitRevision; delete transaction.commitIndex; delete transaction.updatedRevision
+    }
+    expect(occurrenceMigrationEntries(legacy).map((entry) => entry.id)).toEqual([root!.id])
+    expect(() => migrateLedgerToV3(legacy, {})).toThrow('补充有效发生时间')
+    const balances = projectBalances(legacy)
+    const migrated = migrateLedgerToV3(legacy, { [root!.id]: '2026-09-10T18:30:00+08:00' })
+    expect(migrated.schemaVersion).toBe(3)
+    expect(migrated.transactions.find((transaction) => transaction.id === root!.id)?.occurredAt).toBe('2026-09-10T18:30:00+08:00')
+    expect(projectBalances(migrated)).toEqual(balances)
+    validateLedgerData(migrated)
   })
 
   it('rejects malformed minor-unit amounts in the domain layer', () => {
@@ -116,7 +157,7 @@ describe('ledger domain', () => {
     const tag = addTag(ledger, '餐饮')
     const [transaction] = addTransactions(ledger, [{
       kind: 'expense', sourceAccountId: account.id, sourceMoney: { currency: 'CNY', minorUnits: 200 },
-      selectedTagIds: [tag.id], primaryTagId: tag.id, bookedAt: '2026-09-05',
+      selectedTagIds: [tag.id], primaryTagId: tag.id, bookedAt: '2026-09-05', occurredAt: '2026-09-05T12:00:00Z',
     }])
     expect(transaction).toBeDefined()
     reverseTransaction(ledger, transaction!.id)
@@ -146,7 +187,7 @@ describe('ledger domain', () => {
     const account = addAccount(ledger, '现金', false, { CNY: 1_000 })
     const [transaction] = addTransactionsWithTags(ledger, [{
       kind: 'expense', sourceAccountId: account.id, sourceMoney: { currency: 'CNY', minorUnits: 10 },
-      selectedTagIds: ['temp:coffee'], primaryTagId: 'temp:coffee', bookedAt: '2026-09-06',
+      selectedTagIds: ['temp:coffee'], primaryTagId: 'temp:coffee', bookedAt: '2026-09-06', occurredAt: '2026-09-06T12:00:00Z',
     }], [{ clientId: 'temp:coffee', name: '咖啡' }])
     const tag = ledger.tags.find((item) => item.name === '咖啡')
     expect(tag).toBeDefined()
@@ -161,10 +202,10 @@ describe('ledger domain', () => {
     const other = addTag(ledger, '保留标签')
     const [primaryReference, secondaryReference] = addTransactions(ledger, [{
       kind: 'expense', sourceAccountId: account.id, sourceMoney: { currency: 'CNY', minorUnits: 10 },
-      selectedTagIds: [target.id], primaryTagId: target.id, bookedAt: '2026-09-06',
+      selectedTagIds: [target.id], primaryTagId: target.id, bookedAt: '2026-09-06', occurredAt: '2026-09-06T12:00:00Z',
     }, {
       kind: 'expense', sourceAccountId: account.id, sourceMoney: { currency: 'CNY', minorUnits: 10 },
-      selectedTagIds: [other.id, target.id], primaryTagId: other.id, bookedAt: '2026-09-06',
+      selectedTagIds: [other.id, target.id], primaryTagId: other.id, bookedAt: '2026-09-06', occurredAt: '2026-09-06T12:00:00Z',
     }])
     expect(() => resolveAndDeleteTag(ledger, target.id, [])).toThrow('尚未处理')
     resolveAndDeleteTag(ledger, target.id, [

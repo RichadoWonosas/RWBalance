@@ -2,7 +2,7 @@ import type { Account, BalanceMap, Currency, Ledger, Tag, Transaction, Transacti
 import type { AppearanceSettings } from '../core/domain/theme'
 import type { LedgerIndexEntry } from '../core/data/indexed-db/repository'
 import type { EncryptedLedgerContainer, EncryptionId, KdfId, SecurityAlgorithms } from '../core/security/crypto'
-import type { PendingTag, TagDeletionResolution, TagChildDisposition } from '../core/domain/ledger'
+import type { OccurrenceMigrationEntry, PendingTag, TagDeletionResolution, TagChildDisposition } from '../core/domain/ledger'
 
 export interface TagSpendingStat { tagId: string; minorUnits: number }
 
@@ -32,7 +32,7 @@ export interface LedgerView {
 export type LedgerWorkerCommand =
   | { type: 'list-indexes' }
   | { type: 'create'; name: string; secret: string; algorithms?: Pick<SecurityAlgorithms, 'kdf' | 'encryption'> }
-  | { type: 'unlock'; ledgerId: string; secret: string; confirmMigration?: boolean }
+  | { type: 'unlock'; ledgerId: string; secret: string; confirmMigration?: boolean; migrationOccurredAt?: Record<string, string> }
   | { type: 'lock' }
   | { type: 'add-account'; name: string; isPendingSpend: boolean; initial: Record<string, number> }
   | { type: 'update-account'; accountId: string; name: string; isPendingSpend: boolean }
@@ -53,16 +53,16 @@ export type LedgerWorkerCommand =
   | { type: 'set-auto-lock'; seconds: number }
   | { type: 'change-passphrase'; oldSecret: string; newSecret: string }
   | { type: 'migrate-security'; secret: string; kdf: KdfId; encryption: EncryptionId }
-  | { type: 'restore-recovery'; secret: string; confirmMigration?: boolean }
+  | { type: 'restore-recovery'; secret: string; confirmMigration?: boolean; migrationOccurredAt?: Record<string, string> }
   | { type: 'rename-current'; name: string; secret: string }
   | { type: 'rename-locked'; ledgerId: string; name: string; secret: string }
   | { type: 'remove'; ledgerId: string; secret: string }
   | { type: 'get-container'; ledgerId: string }
   | { type: 'inspect-import'; text: string; secret: string }
-  | { type: 'import'; text: string; secret: string; mode: 'new' | 'copy' | 'replace'; confirmMigration?: boolean }
+  | { type: 'import'; text: string; secret: string; mode: 'new' | 'copy' | 'replace'; confirmMigration?: boolean; migrationOccurredAt?: Record<string, string> }
 
 export interface LedgerWorkerResult {
-  migrationInfo?: { name: string; tags: number; transactions: number }
+  migrationInfo?: { name: string; fromVersion: 1 | 2; tags: number; transactions: number; occurrenceEntries: OccurrenceMigrationEntry[] }
   indexes?: LedgerIndexEntry[]
   view?: LedgerView
   container?: EncryptedLedgerContainer
