@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
 
-import { addAccount, addTag, addTransactionsWithTags, correctTransaction, createLedger, deleteAccount, deleteTag, effectiveTransaction, isTransactionDeleted, normalizeName, occurrenceMigrationEntries, projectBalances, reorderTransactionUpdates, resolveAndDeleteTag, restoreAccount, restoreTransaction, reverseTransaction, transactionAuditChain, updateAccount, updateTag, updateTransactionTags, validateLedgerData, migrateLedgerToV3, migrateLedgerV1, setTagParent } from '../core/domain/ledger'
+import { addAccount, addTag, addTagsBatch, addTransactionsWithTags, correctTransaction, createLedger, deleteAccount, deleteTag, effectiveTransaction, isTransactionDeleted, migrateTagCategories, needsTagCategoryMigration, normalizeName, occurrenceMigrationEntries, projectBalances, reorderTransactionUpdates, resolveAndDeleteTag, restoreAccount, restoreTransaction, reverseTransaction, transactionAuditChain, updateAccount, updateTag, updateTransactionTags, validateLedgerData, migrateLedgerToV3, migrateLedgerV1, setTagParent } from '../core/domain/ledger'
 import { currencies, type Currency, type Ledger, type Transaction } from '../core/domain/types'
 import { transactionStatisticalFlows } from '../core/domain/statistics'
 import { decryptLedger, encryptLedger, openLedger, parseContainer, rewrapContainer, type EncryptedLedgerContainer, type SecurityAlgorithms } from '../core/security/crypto'
@@ -131,12 +131,26 @@ function migrationPreview(current: Ledger, container: EncryptedLedgerContainer):
   return { migrationInfo: { name: current.name, fromVersion: current.schemaVersion as 1 | 2, tags: current.tags.length, transactions: current.transactions.length, occurrenceEntries }, backupContainer: container, backupName: `${current.name}-v${current.schemaVersion}升级前备份` }
 }
 async function upgradedContainer(current: Ledger, secret: string, security: SecurityAlgorithms, occurredAt: Record<string, string>) {
-  const upgraded = await encryptLedger(migrateLedgerToV3(current, occurredAt), secret, { algorithms: security })
+  const versionUpgraded = migrateLedgerToV3(current, occurredAt)
+  const ledgerUpgraded = needsTagCategoryMigration(versionUpgraded) ? migrateTagCategories(versionUpgraded) : versionUpgraded
+  const upgraded = await encryptLedger(ledgerUpgraded, secret, { algorithms: security })
   validateLedgerData((await openLedger(upgraded, secret)).ledger)
   return upgraded
 }
 async function saveMigrated(container: EncryptedLedgerContainer, current: Ledger, backup: EncryptedLedgerContainer) {
   await saveLedger(container, { ledgerId: current.id, displayName: current.name, normalizedName: normalizeName(current.name), containerVersion: container.version, updatedAt: current.updatedAt }, backup)
+}
+
+async function upgradeTagCategories(opened: Awaited<ReturnType<typeof openLedger>>, container: EncryptedLedgerContainer, secret: string) {
+  if (!needsTagCategoryMigration(opened.ledger)) return { opened, container }
+  const migrated = migrateTagCategories(opened.ledger)
+  const upgraded = await encryptLedger(migrated, secret, { algorithms: opened.algorithms, dataKey: opened.dataKey })
+  const verified = await openLedger(upgraded, secret)
+  validateLedgerData(verified.ledger)
+  // Category migration is an automatic format upgrade. Keep any existing undo
+  // snapshot, and retain the pre-upgrade ciphertext in the dedicated migration slot.
+  await saveLedger(upgraded, { ledgerId: migrated.id, displayName: migrated.name, normalizedName: normalizeName(migrated.name), containerVersion: upgraded.version, updatedAt: migrated.updatedAt }, container, true)
+  return { opened: verified, container: upgraded }
 }
 
 async function handle(command: LedgerWorkerCommand): Promise<LedgerWorkerResult> {
@@ -164,6 +178,7 @@ async function handle(command: LedgerWorkerCommand): Promise<LedgerWorkerResult>
         opened = await openLedger(container, command.secret)
         await saveMigrated(container, opened.ledger, backup)
       }
+      ;({ opened, container } = await upgradeTagCategories(opened, container, command.secret))
       hasMigrationBackup = Boolean(await getMigrationBackup(container.ledgerId))
       ledger = opened.ledger
       passphrase = command.secret
@@ -178,7 +193,8 @@ async function handle(command: LedgerWorkerCommand): Promise<LedgerWorkerResult>
     case 'update-account': return mutate((current) => updateAccount(current, command.accountId, command.name, command.isPendingSpend))
     case 'delete-account': return mutate((current) => deleteAccount(current, command.accountId))
     case 'restore-account': return mutate((current) => restoreAccount(current, command.accountId))
-    case 'add-tag': return mutate((current) => addTag(current, command.name, command.parentId))
+    case 'add-tag': return mutate((current) => addTag(current, command.name, command.parentId, command.category))
+    case 'add-tags': return mutate((current) => { addTagsBatch(current, command.tags) })
     case 'update-tag': return mutate(current => { updateTag(current, command.tagId, command.name, command.parentId) })
     case 'set-tag-parent': return mutate(current => setTagParent(current, command.tagId, command.parentId))
     case 'delete-tag': return mutate((current) => deleteTag(current, command.tagId, command.children))
@@ -244,6 +260,7 @@ async function handle(command: LedgerWorkerCommand): Promise<LedgerWorkerResult>
         await saveMigrated(container, opened.ledger, recovery.container)
         hasMigrationBackup = true
       } else await restoreLedgerRecovery(current.id)
+      ;({ opened, container } = await upgradeTagCategories(opened, container, command.secret))
       ledger = opened.ledger
       passphrase = command.secret
       dataKey?.fill(0); dataKey = opened.dataKey
@@ -312,7 +329,9 @@ async function handle(command: LedgerWorkerCommand): Promise<LedgerWorkerResult>
       validateLedgerData(opened.ledger)
       const legacy = opened.ledger.schemaVersion < 3
       if (legacy && !command.confirmMigration) return migrationPreview(opened.ledger, container)
-      const imported = legacy ? migrateLedgerToV3(opened.ledger, command.migrationOccurredAt ?? {}) : opened.ledger
+      const versionUpgraded = legacy ? migrateLedgerToV3(opened.ledger, command.migrationOccurredAt ?? {}) : opened.ledger
+      const categoryUpgraded = needsTagCategoryMigration(versionUpgraded)
+      const imported = categoryUpgraded ? migrateTagCategories(versionUpgraded) : versionUpgraded
       const entries = await indexes()
       const idConflict = entries.find((entry) => entry.ledgerId === imported.id)
       const nameConflict = entries.find((entry) => entry.normalizedName === normalizeName(imported.name) && entry.ledgerId !== imported.id)
@@ -332,9 +351,9 @@ async function handle(command: LedgerWorkerCommand): Promise<LedgerWorkerResult>
         backupContainer = await getContainer(imported.id)
         backupName = `${idConflict.displayName}-替换前备份`
       }
-      if (legacy && command.mode !== 'copy') target = await encryptLedger(imported, command.secret, { algorithms: opened.algorithms })
+      if ((legacy || categoryUpgraded) && command.mode !== 'copy') target = await encryptLedger(imported, command.secret, { algorithms: opened.algorithms })
       validateLedgerData((await openLedger(target, command.secret)).ledger)
-      await saveLedger(target, { ledgerId: targetLedger.id, displayName: targetLedger.name, normalizedName: normalizeName(targetLedger.name), containerVersion: target.version, updatedAt: targetLedger.updatedAt }, legacy ? container : undefined)
+      await saveLedger(target, { ledgerId: targetLedger.id, displayName: targetLedger.name, normalizedName: normalizeName(targetLedger.name), containerVersion: target.version, updatedAt: targetLedger.updatedAt }, legacy || categoryUpgraded ? container : undefined)
       return { indexes: await indexes(), backupContainer, backupName }
     }
   }

@@ -25,7 +25,7 @@ function occurrenceTimes(result: LedgerWorkerResult) {
 async function legacy(save = true) {
   const ledger = createLedger('旧账本-' + crypto.randomUUID())
   const account = addAccount(ledger, '现金', false, { CNY: 1000 })
-  const tag = ledger.tags[0]!
+  const tag = ledger.tags.find((item) => item.category === 'expense')!
   addTransactions(ledger, [{ kind: 'expense', sourceAccountId: account.id, sourceMoney: { currency: 'CNY', minorUnits: 100 }, selectedTagIds: [tag.id], primaryTagId: tag.id, bookedAt: '2026-09-08', occurredAt: '2026-09-08T12:00:00Z' }])
   ledger.schemaVersion = 1; delete ledger.hierarchyChanges; ledger.transactions.forEach(tx => { delete tx.explicitTagIds })
   const container = await encryptLedger(ledger, 'test-passphrase')

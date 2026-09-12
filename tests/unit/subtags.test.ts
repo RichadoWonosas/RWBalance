@@ -85,19 +85,19 @@ describe('subtags and schema migration', () => {
   })
   it('keeps temporary ancestor tags, rejects cycles atomically and drops unused new tags', () => {
     const { ledger, draft, parent } = fixture()
-    const pending = [{ clientId: 'temp:leaf', name: '临时子级', parentId: 'temp:parent' }, { clientId: 'temp:parent', name: '临时父级', parentId: parent.id }, { clientId: 'temp:unused', name: '未使用' }]
+    const pending = [{ clientId: 'temp:leaf', name: '临时子级', parentId: 'temp:parent', category: 'expense' as const }, { clientId: 'temp:parent', name: '临时父级', parentId: parent.id, category: 'expense' as const }, { clientId: 'temp:unused', name: '未使用', category: 'expense' as const }]
     const [tx] = addTransactionsWithTags(ledger, [{ ...draft, selectedTagIds: ['temp:leaf'], primaryTagId: 'temp:leaf' }], pending)
     expect(tx?.selectedTagIds).toHaveLength(3)
     expect(ledger.tags.some(tag => tag.name === '未使用')).toBe(false)
     const before = structuredClone(ledger)
-    expect(() => addTransactionsWithTags(ledger, [{ ...draft, selectedTagIds: ['temp:a'], primaryTagId: 'temp:a' }], [{ clientId: 'temp:a', name: 'a', parentId: 'temp:b' }, { clientId: 'temp:b', name: 'b', parentId: 'temp:a' }])).toThrow('成环')
+    expect(() => addTransactionsWithTags(ledger, [{ ...draft, selectedTagIds: ['temp:a'], primaryTagId: 'temp:a' }], [{ clientId: 'temp:a', name: 'a', parentId: 'temp:b', category: 'expense' }, { clientId: 'temp:b', name: 'b', parentId: 'temp:a', category: 'expense' }])).toThrow('成环')
     expect(ledger).toEqual(before)
     validateLedgerData(ledger)
   })
   it('migrates flat v1 with multi-currency and full audit history losslessly and idempotently', async () => {
     const ledger = createLedger('旧账本')
     const account = addAccount(ledger, '现金', false, { CNY: 10000, USD: 5000, GBP: 200, JPY: 300 })
-    const [tag, secondary] = ledger.tags
+    const [tag, secondary] = ledger.tags.filter((item) => item.category === 'expense')
     const draft: TransactionDraft = { kind: 'expense', sourceAccountId: account.id, sourceMoney: { currency: 'CNY', minorUnits: 100 }, selectedTagIds: [secondary!.id, tag!.id], primaryTagId: tag!.id, bookedAt: '2026-01-01', occurredAt: '2026-01-01T12:00:00Z' }
     const [tx] = addTransactions(ledger, [draft])
     correctTransaction(ledger, tx!.id, draft)

@@ -1,6 +1,7 @@
 export const currencies = ['CNY', 'USD', 'GBP', 'JPY'] as const
 export type Currency = (typeof currencies)[number]
 export type TransactionKind = 'income' | 'expense' | 'transfer'
+export type TagCategory = 'income' | 'expense'
 export type TimePrecision = 'date' | 'second'
 export type RecordRole =
   | 'normal'
@@ -27,6 +28,8 @@ export interface Account {
 export interface Tag {
   id: string
   parentId?: string
+  /** Added additively to schema v3; absent only before the category migration. */
+  category?: TagCategory
   name: string
   normalizedName: string
   createdAt: string

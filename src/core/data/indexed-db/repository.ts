@@ -64,7 +64,7 @@ export async function getContainer(ledgerId: string): Promise<EncryptedLedgerCon
   return result
 }
 
-export async function saveLedger(container: EncryptedLedgerContainer, entry: LedgerIndexEntry, migrationBackup?: EncryptedLedgerContainer): Promise<void> {
+export async function saveLedger(container: EncryptedLedgerContainer, entry: LedgerIndexEntry, migrationBackup?: EncryptedLedgerContainer, preserveRecovery = false): Promise<void> {
   const db = await openDb()
   const tx = db.transaction(['containers', 'index', 'recovery', 'migration'], 'readwrite')
   const done = transactionDone(tx)
@@ -76,7 +76,7 @@ export async function saveLedger(container: EncryptedLedgerContainer, entry: Led
       requestResult<LedgerIndexEntry | undefined>(tx.objectStore('index').get(container.ledgerId)),
       requestResult(tx.objectStore('migration').get(container.ledgerId)),
     ])
-    if (previousContainer && previousIndex && JSON.stringify(previousContainer) !== JSON.stringify(container)) {
+    if (!preserveRecovery && previousContainer && previousIndex && JSON.stringify(previousContainer) !== JSON.stringify(container)) {
       tx.objectStore('recovery').put({ ledgerId: container.ledgerId, container: previousContainer, index: previousIndex, savedAt: new Date().toISOString() } satisfies LedgerRecoveryEntry)
     }
     if (migrationBackup && !existingMigration) tx.objectStore('migration').put({ ledgerId: container.ledgerId, container: migrationBackup })

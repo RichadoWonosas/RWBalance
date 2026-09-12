@@ -1,11 +1,11 @@
-import type { Account, BalanceMap, Currency, Ledger, Money, Tag, Transaction, TransactionDraft } from './types'
+import type { Account, BalanceMap, Currency, Ledger, Money, Tag, TagCategory, Transaction, TransactionDraft } from './types'
 import { currencies } from './types'
 import { defaultTheme } from './theme'
 import { assertCanSetParent, expandTagAncestors, validateTagHierarchy } from './tag-hierarchy'
 
 const now = () => new Date().toISOString()
 const id = () => crypto.randomUUID()
-export const defaultTagNames = ['收入', '出行', '饮食', '娱乐', '生活'] as const
+export const defaultTagNames = ['其他收入', '出行', '饮食', '娱乐', '生活'] as const
 const transactionKinds = new Set(['income', 'expense', 'transfer'])
 const recordRoles = new Set(['normal', 'reversal', 'replacement', 'restoration', 'system-account-open', 'system-account-close'])
 
@@ -17,14 +17,15 @@ export function createLedger(name: string): Ledger {
   const cleanName = name.trim()
   if (!cleanName) throw new Error('账本名称不能为空')
   const timestamp = now()
-  const tags = defaultTagNames.map((tagName) => ({
+  const tags = defaultTagNames.map((tagName, index) => ({
     id: id(),
     name: tagName,
     normalizedName: normalizeName(tagName),
+    category: index === 0 ? 'income' as const : 'expense' as const,
     createdAt: timestamp,
     updatedAt: timestamp,
   }))
-  return { id: id(), name: cleanName, schemaVersion: 3, nextTransactionRevision: 1, hierarchyChanges: [], createdAt: timestamp, updatedAt: timestamp, accounts: [], tags, transactions: [], settings: { ...defaultTheme, autoLockSeconds: 300 } }
+  return { id: id(), name: cleanName, schemaVersion: 3, nextTransactionRevision: 1, hierarchyChanges: [], createdAt: timestamp, updatedAt: timestamp, accounts: [], tags, transactions: [], settings: { ...defaultTheme, autoLockSeconds: 300, tagCategoryVersion: 1 } }
 }
 
 const occurredAtPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?(?:Z|[+-]\d{2}:\d{2})$/
@@ -52,10 +53,14 @@ export function validateLedgerData(value: unknown): asserts value is Ledger {
     if (tag.id.startsWith('__')) throw new Error('系统标记不能用作用户标签')
     const normalized = typeof tag.name === 'string' ? normalizeName(tag.name) : ''
     if (!normalized || tag.normalizedName !== normalized || normalizedTags.has(normalized)) throw new Error('标签名称无效或重复')
+    if (tag.category !== undefined && tag.category !== 'income' && tag.category !== 'expense') throw new Error('标签类别无效')
     normalizedTags.add(normalized)
   }
+  const categorized = ledger.settings.tagCategoryVersion === 1
+  if (categorized && ledger.tags.some((tag) => tag.category !== 'income' && tag.category !== 'expense')) throw new Error('分类账本包含未分类标签')
   if (ledger.schemaVersion === 1 && ledger.tags.some(tag => tag.parentId !== undefined)) throw new Error('旧版账本不应包含父级关系')
   validateTagHierarchy(ledger.tags)
+  if (categorized && ledger.tags.some((tag) => tag.parentId && ledger.tags.find((parent) => parent.id === tag.parentId)?.category !== tag.category)) throw new Error('父子标签必须属于同一类别')
   if (ledger.schemaVersion >= 2 && (!Array.isArray(ledger.hierarchyChanges) || ledger.hierarchyChanges.some(change =>
     !change || typeof change.tagId !== 'string' || typeof change.changedAt !== 'string' ||
     !['reparent', 'delete'].includes(change.action) || !Number.isSafeInteger(change.affectedTransactions) || change.affectedTransactions < 0 ||
@@ -92,6 +97,12 @@ export function validateLedgerData(value: unknown): asserts value is Ledger {
     if (transaction.kind === 'transfer') { if (!transaction.sourceAccountId || !accountIds.has(transaction.sourceAccountId) || !transaction.destinationAccountId || !accountIds.has(transaction.destinationAccountId)) throw new Error('转移账目账户无效'); checkMoney(transaction.sourceMoney, '支出金额'); checkMoney(transaction.destinationMoney, '收入金额') }
     if (transaction.kind === 'expense' && (transaction.recordRole === 'normal' || transaction.recordRole === 'replacement')) {
       if (!transaction.selectedTagIds.length || !transaction.primaryTagId || !transaction.selectedTagIds.includes(transaction.primaryTagId)) throw new Error('支出账目缺少有效主标签')
+    }
+    if (transaction.kind === 'income' && (transaction.recordRole === 'normal' || transaction.recordRole === 'replacement') && categorized) {
+      if (!transaction.selectedTagIds.length || !transaction.primaryTagId || !transaction.selectedTagIds.includes(transaction.primaryTagId)) throw new Error('收入账目缺少有效主标签')
+    }
+    if (categorized && !system && (transaction.kind === 'income' || transaction.kind === 'expense') && (transaction.recordRole === 'normal' || transaction.recordRole === 'replacement')) {
+      if (transaction.selectedTagIds.some((tagId) => ledger.tags.find((tag) => tag.id === tagId)?.category !== transaction.kind)) throw new Error('账目使用了错误类别的标签')
     }
     if (transaction.targetTransactionId && (!transactionIds.has(transaction.targetTransactionId) || transaction.targetTransactionId === transaction.id)) throw new Error('账目审计引用无效')
     if (transaction.relatedTransactionIds?.some((id) => !transactionIds.has(id))) throw new Error('账目更正组引用无效')
@@ -148,6 +159,8 @@ function transactionFromDraft(draft: TransactionDraft, role: Transaction['record
     if (!draft.destinationAccountId || !draft.destinationMoney) throw new Error('收入账目缺少收入账户或金额')
     validateMoney(draft.destinationMoney, '收入金额')
     if (ledger) validateActiveAccount(ledger, draft.destinationAccountId, '收入账户')
+    if ((role === 'normal' || role === 'replacement') && (!draft.selectedTagIds?.length || !draft.primaryTagId || !draft.selectedTagIds.includes(draft.primaryTagId))) throw new Error('收入账目必须选择标签和主标签')
+    if ((role === 'normal' || role === 'replacement') && ledger && draft.selectedTagIds!.some((tagId) => ledger.tags.find((tag) => tag.id === tagId)?.category !== 'income')) throw new Error('收入账目只能选择收入类标签')
   }
   if (draft.kind === 'expense') {
     if (!draft.sourceAccountId || !draft.sourceMoney) throw new Error('支出账目缺少支出账户或金额')
@@ -155,6 +168,7 @@ function transactionFromDraft(draft: TransactionDraft, role: Transaction['record
     if (ledger) validateActiveAccount(ledger, draft.sourceAccountId, '支出账户')
     if (!draft.selectedTagIds?.length || !draft.primaryTagId || !draft.selectedTagIds.includes(draft.primaryTagId)) throw new Error('支出账目必须选择标签和主标签')
     if ((role === 'normal' || role === 'replacement') && ledger && draft.selectedTagIds.some((tagId) => !ledger.tags.some((tag) => tag.id === tagId))) throw new Error('支出账目包含不存在的标签')
+    if ((role === 'normal' || role === 'replacement') && ledger && draft.selectedTagIds.some((tagId) => ledger.tags.find((tag) => tag.id === tagId)?.category !== 'expense')) throw new Error('支出账目只能选择支出类标签')
   }
   if (draft.kind === 'transfer') {
     if (!draft.sourceAccountId || !draft.sourceMoney || !draft.destinationAccountId || !draft.destinationMoney) throw new Error('转移账目需要完整的收支两侧信息')
@@ -170,9 +184,9 @@ function transactionFromDraft(draft: TransactionDraft, role: Transaction['record
   return {
     id: id(), kind: draft.kind, sourceAccountId: draft.sourceAccountId, sourceMoney: draft.sourceMoney,
     destinationAccountId: draft.destinationAccountId, destinationMoney: draft.destinationMoney,
-    explicitTagIds: draft.kind === 'expense' ? [...new Set(draft.selectedTagIds ?? [])] : [],
-    selectedTagIds: draft.kind === 'expense' ? (ledger ? expandTransactionTags(ledger.tags, draft.selectedTagIds ?? []) : [...new Set(draft.selectedTagIds ?? [])]) : [],
-    primaryTagId: draft.kind === 'expense' ? draft.primaryTagId : undefined,
+    explicitTagIds: draft.kind !== 'transfer' ? [...new Set(draft.selectedTagIds ?? [])] : [],
+    selectedTagIds: draft.kind !== 'transfer' ? (ledger ? expandTransactionTags(ledger.tags, draft.selectedTagIds ?? []) : [...new Set(draft.selectedTagIds ?? [])]) : [],
+    primaryTagId: draft.kind !== 'transfer' ? draft.primaryTagId : undefined,
     note: draft.note?.trim() ?? '', bookedAt: draft.bookedAt, occurredAt: draft.occurredAt, timePrecision: 'second', createdAt: recordTimestamp, updatedAt: recordTimestamp,
     recordRole: role, operationGroupId: groupId,
   }
@@ -287,13 +301,21 @@ export function restoreAccount(ledger: Ledger, accountId: string): void {
   ledger.updatedAt = timestamp
 }
 
-export function addTag(ledger: Ledger, name: string, parentId?: string): Tag {
+function validateTagParentCategory(tags: Tag[], category: TagCategory, parentId?: string) {
+  if (!parentId) return
+  const parent = tags.find((tag) => tag.id === parentId)
+  if (!parent) throw new Error('父标签不存在')
+  if (parent.category !== category) throw new Error('父标签必须属于同一类别')
+}
+
+export function addTag(ledger: Ledger, name: string, parentId?: string, category: TagCategory = 'expense'): Tag {
   const cleanName = name.trim()
   const normalizedName = normalizeName(cleanName)
   if (!normalizedName) throw new Error('标签名称不能为空')
   if (ledger.tags.some((tag) => tag.normalizedName === normalizedName)) throw new Error('标签名称已存在')
   const timestamp = now()
-  const tag: Tag = { id: id(), name: cleanName, normalizedName, createdAt: timestamp, updatedAt: timestamp, parentId }
+  validateTagParentCategory(ledger.tags, category, parentId)
+  const tag: Tag = { id: id(), name: cleanName, normalizedName, category, createdAt: timestamp, updatedAt: timestamp, parentId }
   validateTagHierarchy([...ledger.tags, tag])
   ledger.tags.push(tag)
   ledger.updatedAt = timestamp
@@ -309,6 +331,7 @@ export function updateTag(ledger: Ledger, tagId: string, name: string, parentId?
   // A display-only rename that normalizes to the current value is valid.
   if (ledger.tags.some(item => item.id !== tagId && item.normalizedName === normalizedName)) throw new Error('标签名称已存在')
   assertCanSetParent(ledger.tags, tagId, parentId)
+  validateTagParentCategory(ledger.tags, tag.category ?? 'expense', parentId)
   if (tag.parentId !== parentId) setTagParent(ledger, tagId, parentId)
   const timestamp = now()
   tag.name = cleanName
@@ -326,6 +349,43 @@ function expandTransactionTags(tags: Tag[], direct: string[]): string[] {
 function rebuildTagClosure(ledger: Ledger) {
   for (const transaction of ledger.transactions) transaction.selectedTagIds = expandTransactionTags(ledger.tags, directTags(transaction))
 }
+
+export function needsTagCategoryMigration(ledger: Ledger): boolean {
+  return ledger.settings.tagCategoryVersion !== 1 || ledger.tags.some((tag) => tag.category !== 'income' && tag.category !== 'expense')
+}
+
+/** Adds income/expense namespaces to schema-v3 ledgers without changing money records. */
+export function migrateTagCategories(value: Ledger): Ledger {
+  validateLedgerData(value)
+  const candidate = structuredClone(value)
+  if (!needsTagCategoryMigration(candidate)) return candidate
+  for (const tag of candidate.tags) tag.category = 'expense'
+
+  // The old default “收入” chip was selectable as an expense tag. Keep it when
+  // referenced; otherwise replace it with a real income fallback tag.
+  const legacyIncome = candidate.tags.find((tag) => tag.normalizedName === normalizeName('收入'))
+  const legacyIncomeReferenced = legacyIncome && (candidate.transactions.some((transaction) => transaction.kind === 'expense' && directTags(transaction).includes(legacyIncome.id)) || candidate.tags.some((tag) => tag.parentId === legacyIncome.id))
+  if (legacyIncome && !legacyIncomeReferenced) candidate.tags.splice(candidate.tags.indexOf(legacyIncome), 1)
+
+  const baseName = '其他收入'
+  let fallbackName = baseName
+  let suffix = 2
+  while (candidate.tags.some((tag) => tag.normalizedName === normalizeName(fallbackName))) fallbackName = `${baseName}（${suffix++}）`
+  const timestamp = now()
+  const fallback: Tag = { id: id(), name: fallbackName, normalizedName: normalizeName(fallbackName), category: 'income', createdAt: timestamp, updatedAt: timestamp }
+  candidate.tags.push(fallback)
+  for (const transaction of candidate.transactions) {
+    if (transaction.kind !== 'income' || (transaction.recordRole !== 'normal' && transaction.recordRole !== 'replacement')) continue
+    transaction.explicitTagIds = [fallback.id]
+    transaction.selectedTagIds = [fallback.id]
+    transaction.primaryTagId = fallback.id
+  }
+  candidate.settings.tagCategoryVersion = 1
+  candidate.updatedAt = timestamp
+  validateLedgerData(candidate)
+  return candidate
+}
+
 export function migrateLedgerV1(value: Ledger): Ledger {
   validateLedgerData(value)
   const candidate = structuredClone(value)
@@ -426,6 +486,8 @@ export function migrateLedgerToV3(value: Ledger, occurredAtByTransactionId: Reco
 }
 export function previewTagParent(ledger: Ledger, tagId: string, parentId?: string) {
   assertCanSetParent(ledger.tags, tagId, parentId)
+  const tag = ledger.tags.find((candidate) => candidate.id === tagId)!
+  validateTagParentCategory(ledger.tags, tag.category ?? 'expense', parentId)
   const candidate = structuredClone(ledger)
   candidate.tags.find(tag => tag.id === tagId)!.parentId = parentId
   rebuildTagClosure(candidate)
@@ -434,6 +496,7 @@ export function previewTagParent(ledger: Ledger, tagId: string, parentId?: strin
 export function setTagParent(ledger: Ledger, tagId: string, parentId?: string): void {
   const affectedTransactions = previewTagParent(ledger, tagId, parentId)
   const tag = ledger.tags.find(tag => tag.id === tagId)!
+  validateTagParentCategory(ledger.tags, tag.category ?? 'expense', parentId)
   if (tag.parentId === parentId) return
   const changedAt = now()
   ledger.hierarchyChanges ??= []
@@ -484,15 +547,18 @@ export function resolveAndDeleteTag(ledger: Ledger, tagId: string, resolutions: 
     let replacementId = resolution.replacementTagId
     if (resolution.action === 'replace') {
       if (replacementId === tagId) throw new Error('替换目标不能是待删除标签')
-      if (replacementId && !ledger.tags.some((item) => item.id === replacementId)) throw new Error('替换目标标签不存在')
+      if (replacementId && !ledger.tags.some((item) => item.id === replacementId && item.category === tag.category)) throw new Error('替换目标标签不存在或类别不一致')
       if (!replacementId) {
         const cleanName = resolution.replacementTagName?.trim() ?? ''
         const normalizedName = normalizeName(cleanName)
         if (!normalizedName || normalizedName === tag.normalizedName) throw new Error('请输入有效的替换标签名称')
         const existing = ledger.tags.find((item) => item.normalizedName === normalizedName)
-        if (existing) replacementId = existing.id
+        if (existing) {
+          if (existing.category !== tag.category) throw new Error('同名替换标签属于其他类别')
+          replacementId = existing.id
+        }
         else {
-          const planned = plannedTags.get(normalizedName) ?? { id: id(), name: cleanName, normalizedName, createdAt: now(), updatedAt: now() }
+          const planned = plannedTags.get(normalizedName) ?? { id: id(), name: cleanName, normalizedName, category: tag.category, createdAt: now(), updatedAt: now() }
           plannedTags.set(normalizedName, planned)
           replacementId = planned.id
         }
@@ -519,7 +585,32 @@ export function resolveAndDeleteTag(ledger: Ledger, tagId: string, resolutions: 
   ledger.updatedAt = timestamp
 }
 
-export interface PendingTag { clientId: string; name: string; parentId?: string }
+export interface PendingTag { clientId: string; name: string; parentId?: string; category: TagCategory }
+
+export function addTagsBatch(ledger: Ledger, pendingTags: PendingTag[]): Tag[] {
+  if (!pendingTags.length) throw new Error('至少需要一个待添加标签')
+  if (new Set(pendingTags.map((tag) => tag.clientId)).size !== pendingTags.length) throw new Error('临时标签 ID 无效或重复')
+  const idMap = new Map<string, string>()
+  const added: Tag[] = []
+  for (const pending of pendingTags) {
+    if (pending.category !== 'income' && pending.category !== 'expense') throw new Error('标签类别无效')
+    const cleanName = pending.name.trim()
+    const normalizedName = normalizeName(cleanName)
+    if (!normalizedName) throw new Error('标签名称不能为空')
+    if (ledger.tags.some((tag) => tag.normalizedName === normalizedName) || added.some((tag) => tag.normalizedName === normalizedName)) throw new Error(`标签名称“${cleanName}”已存在`)
+    const timestamp = now()
+    const tag: Tag = { id: id(), name: cleanName, normalizedName, category: pending.category, createdAt: timestamp, updatedAt: timestamp }
+    added.push(tag)
+    idMap.set(pending.clientId, tag.id)
+  }
+  for (const [index, pending] of pendingTags.entries()) added[index]!.parentId = pending.parentId ? idMap.get(pending.parentId) ?? pending.parentId : undefined
+  const combined = [...ledger.tags, ...added]
+  validateTagHierarchy(combined)
+  for (const tag of added) validateTagParentCategory(combined, tag.category!, tag.parentId)
+  ledger.tags.push(...added)
+  ledger.updatedAt = now()
+  return added
+}
 
 export function addTransactionsWithTags(ledger: Ledger, drafts: TransactionDraft[], pendingTags: PendingTag[]): Transaction[] {
   if (!drafts.length) throw new Error('至少需要一条账目')
@@ -537,14 +628,18 @@ export function addTransactionsWithTags(ledger: Ledger, drafts: TransactionDraft
     }
   }
   for (const pending of pendingTags.filter((tag) => referencedTagIds.has(tag.clientId))) {
+    if (pending.category !== 'income' && pending.category !== 'expense') throw new Error('标签类别无效')
     const cleanName = pending.name.trim()
     const normalizedName = normalizeName(cleanName)
     if (!normalizedName) throw new Error('标签名称不能为空')
     const existing = [...ledger.tags, ...plannedTags].find((tag) => tag.normalizedName === normalizedName)
-    if (existing) tagIdMap.set(pending.clientId, existing.id)
+    if (existing) {
+      if (existing.category !== pending.category) throw new Error('同名标签属于其他类别')
+      tagIdMap.set(pending.clientId, existing.id)
+    }
     else {
       const timestamp = now()
-      const tag = { id: id(), name: cleanName, normalizedName, createdAt: timestamp, updatedAt: timestamp }
+      const tag = { id: id(), name: cleanName, normalizedName, category: pending.category, createdAt: timestamp, updatedAt: timestamp }
       plannedTags.push(tag)
       tagIdMap.set(pending.clientId, tag.id)
     }
@@ -554,6 +649,7 @@ export function addTransactionsWithTags(ledger: Ledger, drafts: TransactionDraft
     if (tag && pending.parentId) tag.parentId = tagIdMap.get(pending.parentId) ?? pending.parentId
   }
   validateTagHierarchy([...ledger.tags, ...plannedTags])
+  for (const tag of plannedTags) validateTagParentCategory([...ledger.tags, ...plannedTags], tag.category!, tag.parentId)
   const mappedDrafts = drafts.map((draft) => ({
     ...draft,
     selectedTagIds: draft.selectedTagIds?.map((tagId) => tagIdMap.get(tagId) ?? tagId),
@@ -636,9 +732,9 @@ export function transactionAuditChain(ledger: Ledger, transactionId: string): Tr
 export function updateTransactionTags(ledger: Ledger, transactionId: string, selectedTagIds: string[], primaryTagId: string): void {
   const root = rootTransaction(ledger, transactionId)
   const target = root ? effectiveTransaction(ledger, root.id) : undefined
-  if (!target || target.kind !== 'expense') throw new Error('只能修改有效支出账目的标签')
-  if (!selectedTagIds.length || !primaryTagId || !selectedTagIds.includes(primaryTagId)) throw new Error('支出账目必须选择标签和主标签')
-  if (selectedTagIds.some((tagId) => !ledger.tags.some((tag) => tag.id === tagId))) throw new Error('支出账目包含不存在的标签')
+  if (!target || target.kind === 'transfer') throw new Error('只能修改有效收入或支出账目的标签')
+  if (!selectedTagIds.length || !primaryTagId || !selectedTagIds.includes(primaryTagId)) throw new Error('账目必须选择标签和主标签')
+  if (selectedTagIds.some((tagId) => ledger.tags.find((tag) => tag.id === tagId)?.category !== target.kind)) throw new Error(`${target.kind === 'income' ? '收入' : '支出'}账目只能选择对应类别的标签`)
   target.explicitTagIds = [...new Set(selectedTagIds)]
   target.selectedTagIds = expandTagAncestors(ledger.tags, target.explicitTagIds)
   target.primaryTagId = primaryTagId

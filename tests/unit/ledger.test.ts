@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { addAccount, addTag, addTransactions, addTransactionsWithTags, correctTransaction, createLedger, defaultTagNames, deleteAccount, effectiveTransaction, isTransactionDeleted, migrateLedgerToV3, normalizeName, occurrenceMigrationEntries, projectBalances, reorderTransactionUpdates, resolveAndDeleteTag, restoreAccount, restoreTransaction, reverseTransaction, transactionAuditChain, updateAccount, updateTransactionTags, validateLedgerData } from '../../src/core/domain/ledger'
+import { addAccount, addTag, addTagsBatch, addTransactions, addTransactionsWithTags, correctTransaction, createLedger, defaultTagNames, deleteAccount, effectiveTransaction, isTransactionDeleted, migrateLedgerToV3, migrateTagCategories, normalizeName, occurrenceMigrationEntries, projectBalances, reorderTransactionUpdates, resolveAndDeleteTag, restoreAccount, restoreTransaction, reverseTransaction, transactionAuditChain, updateAccount, updateTransactionTags, validateLedgerData } from '../../src/core/domain/ledger'
 import { decodeAppearance, encodeAppearance, normalizeHue, profileForHue } from '../../src/core/domain/theme'
 import { currencyRules, toMinorUnits } from '../../src/core/domain/money'
 
@@ -26,6 +26,51 @@ describe('ledger domain', () => {
     const compact = encodeAppearance({ primaryHue: 270, secondaryHue: 210, colorTone: 'dark' })
     expect(compact.length).toBeLessThanOrEqual(4)
     expect(decodeAppearance(compact)).toEqual({ primaryHue: 270, secondaryHue: 210, colorTone: 'dark' })
+  })
+
+  it('migrates uncategorized tags and gives historical income a safe fallback label', () => {
+    const ledger = createLedger('标签类别迁移')
+    const account = addAccount(ledger, '现金', false, { CNY: 0 })
+    const incomeTag = ledger.tags.find((tag) => tag.category === 'income')!
+    const [income] = addTransactions(ledger, [{ kind: 'income', destinationAccountId: account.id, destinationMoney: { currency: 'CNY', minorUnits: 500 }, selectedTagIds: [incomeTag.id], primaryTagId: incomeTag.id, bookedAt: '2026-09-12', occurredAt: '2026-09-12T08:00:00+08:00' }])
+    incomeTag.name = '收入'; incomeTag.normalizedName = normalizeName('收入')
+    ledger.tags.forEach((tag) => { delete tag.category })
+    delete ledger.settings.tagCategoryVersion
+    income!.selectedTagIds = []; income!.explicitTagIds = []; delete income!.primaryTagId
+    const balances = projectBalances(ledger)
+    const migrated = migrateTagCategories(ledger)
+    expect(projectBalances(migrated)).toEqual(balances)
+    expect(migrated.tags.some((tag) => tag.name === '收入')).toBe(false)
+    expect(migrated.tags.filter((tag) => tag.category === 'income')).toHaveLength(1)
+    expect(migrated.tags.filter((tag) => tag.category === 'expense')).toHaveLength(4)
+    expect(migrated.transactions.find((transaction) => transaction.id === income!.id)?.primaryTagId).toBe(migrated.tags.find((tag) => tag.category === 'income')?.id)
+    expect(migrateTagCategories(migrated)).toEqual(migrated)
+    validateLedgerData(migrated)
+  })
+
+  it('recognizes and upgrades an empty legacy tag namespace', () => {
+    const ledger = createLedger('空标签迁移')
+    ledger.tags = []
+    delete ledger.settings.tagCategoryVersion
+    const migrated = migrateTagCategories(ledger)
+    expect(migrated.tags.map((tag) => [tag.name, tag.category])).toEqual([['其他收入', 'income']])
+    expect(migrated.settings.tagCategoryVersion).toBe(1)
+    validateLedgerData(migrated)
+  })
+
+  it('creates mixed-category tag hierarchies atomically and enforces transaction categories', () => {
+    const ledger = createLedger('标签类别')
+    const created = addTagsBatch(ledger, [
+      { clientId: 'temp:salary', name: '工资', category: 'income' },
+      { clientId: 'temp:bonus', name: '奖金', parentId: 'temp:salary', category: 'income' },
+      { clientId: 'temp:coffee', name: '咖啡', parentId: ledger.tags.find((tag) => tag.name === '饮食')!.id, category: 'expense' },
+    ])
+    expect(created.find((tag) => tag.name === '奖金')?.parentId).toBe(created.find((tag) => tag.name === '工资')?.id)
+    const account = addAccount(ledger, '现金', false, { CNY: 1000 })
+    const salary = created.find((tag) => tag.name === '奖金')!
+    expect(() => addTransactions(ledger, [{ kind: 'expense', sourceAccountId: account.id, sourceMoney: { currency: 'CNY', minorUnits: 1 }, selectedTagIds: [salary.id], primaryTagId: salary.id, bookedAt: '2026-09-12', occurredAt: '2026-09-12T09:00:00+08:00' }])).toThrow('支出账目只能选择支出类标签')
+    addTransactions(ledger, [{ kind: 'income', destinationAccountId: account.id, destinationMoney: { currency: 'CNY', minorUnits: 1 }, selectedTagIds: [salary.id], primaryTagId: salary.id, bookedAt: '2026-09-12', occurredAt: '2026-09-12T09:00:00+08:00' }])
+    validateLedgerData(ledger)
   })
 
   it('keeps tag-only edits out of the money audit stream', () => {
@@ -109,7 +154,7 @@ describe('ledger domain', () => {
   it('uses each draft staging time as its initial modification time', () => {
     const ledger = createLedger('批量顺序')
     const account = addAccount(ledger, '现金', false, { CNY: 1_000 })
-    const tag = ledger.tags[0]!
+    const tag = ledger.tags.find((item) => item.category === 'expense')!
     const stagedAt = ['2026-09-12T01:00:00.100Z', '2026-09-12T01:00:00.200Z', '2026-09-12T01:00:00.300Z']
     const drafts = ['20:00:00', '19:00:00', '18:00:00'].map((time, index) => ({
       kind: 'expense' as const,
@@ -130,7 +175,7 @@ describe('ledger domain', () => {
   it('reorders a complete same-second modification group by exchanging timestamp slots', () => {
     const ledger = createLedger('同秒顺序')
     const account = addAccount(ledger, '现金', false, { CNY: 1_000 })
-    const tag = ledger.tags[0]!
+    const tag = ledger.tags.find((item) => item.category === 'expense')!
     const base = { kind: 'expense' as const, sourceAccountId: account.id, sourceMoney: { currency: 'CNY' as const, minorUnits: 1 }, selectedTagIds: [tag.id], primaryTagId: tag.id, bookedAt: '2026-09-11', occurredAt: '2026-09-11T12:00:00+08:00' }
     const [first, second] = addTransactions(ledger, [
       { ...base, note: '先暂存', stagedAt: '2026-09-12T01:02:03.100Z' },
@@ -146,7 +191,7 @@ describe('ledger domain', () => {
   it('forces legacy user records to receive confirmed occurrence times before v3 migration', () => {
     const current = createLedger('补时迁移')
     const account = addAccount(current, '现金', false, { CNY: 1_000 })
-    const tag = current.tags[0]!
+    const tag = current.tags.find((item) => item.category === 'expense')!
     const [root] = addTransactions(current, [{ kind: 'expense', sourceAccountId: account.id, sourceMoney: { currency: 'CNY', minorUnits: 100 }, selectedTagIds: [tag.id], primaryTagId: tag.id, bookedAt: '2026-09-10', occurredAt: '2026-09-10T18:30:00+08:00' }])
     const legacy = structuredClone(current)
     legacy.schemaVersion = 2
@@ -206,7 +251,7 @@ describe('ledger domain', () => {
     const [transaction] = addTransactionsWithTags(ledger, [{
       kind: 'expense', sourceAccountId: account.id, sourceMoney: { currency: 'CNY', minorUnits: 10 },
       selectedTagIds: ['temp:coffee'], primaryTagId: 'temp:coffee', bookedAt: '2026-09-06', occurredAt: '2026-09-06T12:00:00Z',
-    }], [{ clientId: 'temp:coffee', name: '咖啡' }])
+    }], [{ clientId: 'temp:coffee', name: '咖啡', category: 'expense' }])
     const tag = ledger.tags.find((item) => item.name === '咖啡')
     expect(tag).toBeDefined()
     expect(transaction?.selectedTagIds).toEqual([tag?.id])

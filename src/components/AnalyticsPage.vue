@@ -27,6 +27,7 @@ const exchangeHoverIndex = ref<number | null>(null)
 const donutHoverId = ref<string | null>(null)
 type DataTableKey = 'accounts' | 'trend' | 'donut' | 'exchange'
 const openDataTables = reactive<Record<DataTableKey, boolean>>({ accounts: false, trend: false, donut: false, exchange: false })
+const statTagName = (tagId: string) => implicitTagName(tagId) ?? (tagPath(props.ledger.tags, tagId) || '系统标签')
 
 const CHART_WIDTH = 600
 const CHART_HEIGHT = 240
@@ -203,6 +204,7 @@ async function savePng() { await drawReport(); reportCanvas.value?.toBlob((blob)
 
 <template>
   <section class="analytics-toolbar surface"><div><span class="eyebrow">ANALYTICS RANGE</span><h3>{{ range.from }} — {{ range.to }}</h3></div><div class="range-buttons"><button v-for="item in ([['30','近 30 天'],['90','近 90 天'],['year','今年'],['custom','自定义']] as const)" :key="item[0]" class="ghost small" :class="{ selected: preset === item[0] }" @click="preset = item[0]">{{ item[1] }}</button></div><div v-if="preset === 'custom'" class="custom-range"><label>开始<input name="custom-from" v-model="customFrom" type="date" /></label><label>结束<input name="custom-to" v-model="customTo" type="date" /></label></div><button class="primary" @click="openExport">导出统计 PNG</button></section>
+  <div class="tag-stat-grid"><section v-for="mode in (['primary','included'] as const)" :key="mode" class="surface"><span class="eyebrow">LAST 30 DAYS</span><h3>{{ mode === 'primary' ? '主标签支出 Top 3' : '任意包含标签 Top 3' }}</h3><div class="tag-stat-currencies"><div v-for="currency in currencies" :key="currency"><strong>{{ currency }}</strong><ol><li v-for="stat in ledger.tagStats[mode][currency]" :key="stat.tagId"><span>{{ statTagName(stat.tagId) }}</span><b>{{ formatMinorUnits(stat.minorUnits, currency) }}</b></li><li v-if="!ledger.tagStats[mode][currency].length">暂无支出</li></ol></div></div></section></div>
   <div class="analytics-summary">
     <button v-for="currency in currencies" :key="currency" class="metric-card" @click="emit('drill',{ currency })"><span>{{ currency }}</span><strong>{{ formatMinorUnits(totals[currency].income - totals[currency].expense, currency) }}</strong><small>收入 {{ formatMinorUnits(totals[currency].income, currency) }} · 支出 {{ formatMinorUnits(totals[currency].expense, currency) }}</small><small>储蓄 {{ formatMinorUnits(categoryBalances[currency].saving, currency) }} · 待支出 {{ formatMinorUnits(categoryBalances[currency].pending, currency) }}</small></button>
   </div>

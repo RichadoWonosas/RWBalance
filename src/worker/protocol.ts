@@ -1,4 +1,4 @@
-import type { Account, BalanceMap, Currency, Ledger, Tag, Transaction, TransactionDraft } from '../core/domain/types'
+import type { Account, BalanceMap, Currency, Ledger, Tag, TagCategory, Transaction, TransactionDraft } from '../core/domain/types'
 import type { AppearanceSettings } from '../core/domain/theme'
 import type { LedgerIndexEntry } from '../core/data/indexed-db/repository'
 import type { EncryptedLedgerContainer, EncryptionId, KdfId, SecurityAlgorithms } from '../core/security/crypto'
@@ -38,7 +38,8 @@ export type LedgerWorkerCommand =
   | { type: 'update-account'; accountId: string; name: string; isPendingSpend: boolean }
   | { type: 'delete-account'; accountId: string }
   | { type: 'restore-account'; accountId: string }
-  | { type: 'add-tag'; name: string; parentId?: string }
+  | { type: 'add-tag'; name: string; parentId?: string; category?: TagCategory }
+  | { type: 'add-tags'; tags: PendingTag[] }
   | { type: 'update-tag'; tagId: string; name: string; parentId?: string }
   | { type: 'set-tag-parent'; tagId: string; parentId?: string }
   | { type: 'get-migration-backup'; ledgerId: string }

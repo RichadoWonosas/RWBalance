@@ -1,7 +1,7 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import type { AppearanceSettings } from '../../core/domain/theme'
-import type { TransactionDraft } from '../../core/domain/types'
+import type { TagCategory, TransactionDraft } from '../../core/domain/types'
 import type { PendingTag, TagDeletionResolution, TagChildDisposition } from '../../core/domain/ledger'
 import type { LedgerIndexEntry } from '../../core/data/indexed-db/repository'
 import { createLedgerWorkerClient, type LedgerWorkerClient } from '../../worker/client'
@@ -104,7 +104,8 @@ export const useLedgerStore = defineStore('ledger-session', () => {
   async function updateAccount(accountId: string, name: string, isPendingSpend: boolean) { return run({ type: 'update-account', accountId, name, isPendingSpend }) }
   async function deleteAccount(accountId: string) { return run({ type: 'delete-account', accountId }) }
   async function restoreAccount(accountId: string) { return run({ type: 'restore-account', accountId }) }
-  async function addTag(name: string, parentId?: string) { return run({ type: 'add-tag', name, parentId }) }
+  async function addTag(name: string, parentId?: string, category: TagCategory = 'expense') { return run({ type: 'add-tag', name, parentId, category }) }
+  async function addTags(tags: PendingTag[]) { return run({ type: 'add-tags', tags }) }
   async function updateTag(tagId: string, name: string, parentId?: string) { return run({ type: 'update-tag', tagId, name, parentId }) }
   async function setTagParent(tagId: string, parentId?: string) { return run({ type: 'set-tag-parent', tagId, parentId }) }
   async function deleteTag(tagId: string, children?: TagChildDisposition) { return run({ type: 'delete-tag', tagId, children }) }
@@ -139,7 +140,7 @@ export const useLedgerStore = defineStore('ledger-session', () => {
   return {
     ledger, indexes, busy, error, isUnlocked, migration, confirmMigration, exportMigrationPreview, exportMigrationBackup, setTagParent,
     initialize, refreshIndexes, create, unlock, lock, terminateSession, remove, rename,
-    addAccount, updateAccount, deleteAccount, restoreAccount, addTag, updateTag, deleteTag, resolveDeleteTag, addTransactions,
+    addAccount, updateAccount, deleteAccount, restoreAccount, addTag, addTags, updateTag, deleteTag, resolveDeleteTag, addTransactions,
     reverseTransaction, restoreTransaction, updateTransactionTags, correctTransaction, reorderTransactionUpdates, setAppearance, setAutoLockSeconds, exportById, exportCurrent,
     inspectImportFile, importFile, changePassphrase, migrateSecurity, restoreRecovery,
   }
