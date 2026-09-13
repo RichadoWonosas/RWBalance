@@ -33,6 +33,7 @@ test('shell remains usable across layout tiers and 200% text sizing', async ({ p
         contentBottomPadding: Number.parseFloat(contentStyle.paddingBottom),
         sidebarHeight: sidebar.getBoundingClientRect().height,
         navFontSize: Number.parseFloat(getComputedStyle(navLabel).fontSize),
+        navIconFontSize: Number.parseFloat(getComputedStyle(document.querySelector<HTMLElement>('.sidebar-button-icon')!).fontSize),
         currencyColumns: getComputedStyle(document.querySelector<HTMLElement>('.currency-grid')!).gridTemplateColumns.split(' ').length,
       }
     })
@@ -44,6 +45,8 @@ test('shell remains usable across layout tiers and 200% text sizing', async ({ p
       expect(geometry.navFontSize).toBeGreaterThanOrEqual(12)
     } else {
       expect(geometry.sidebarPosition).toBe('sticky')
+      expect(geometry.navFontSize).toBeGreaterThanOrEqual(16.8)
+      expect(geometry.navIconFontSize).toBeGreaterThanOrEqual(21.5)
     }
     expect(geometry.currencyColumns).toBe(width <= 520 ? 1 : width <= 1000 ? 2 : 4)
 
