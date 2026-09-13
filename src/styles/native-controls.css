@@ -1,0 +1,50 @@
+:where(#app,.app-portal) select { color-scheme: inherit; }
+:where(#app,.app-portal) option { background: var(--rw-color-control-background); color: var(--rw-color-text-primary); }
+input[type='number'] { appearance: textfield; -moz-appearance: textfield; }
+input[type='number']::-webkit-inner-spin-button,
+input[type='number']::-webkit-outer-spin-button { margin: 0; appearance: none; -webkit-appearance: none; }
+
+@supports (appearance: base-select) {
+  :where(#app,.app-portal) select, :where(#app,.app-portal) select::picker(select) { appearance: base-select; }
+
+  :where(#app,.app-portal) select::picker(select) {
+    background: var(--rw-color-surface);
+    color: var(--rw-color-text-primary);
+    border: 1px solid var(--rw-color-border);
+    border-radius: 10px;
+    padding: .35rem;
+    box-shadow: 0 12px 28px var(--rw-color-shadow);
+    opacity: 0;
+    transform: translateY(-6px);
+    transition: opacity .18s ease, transform .18s ease, display .18s allow-discrete, overlay .18s allow-discrete;
+  }
+
+  :where(#app,.app-portal) select:open::picker(select) { opacity: 1; transform: translateY(0); }
+
+  @starting-style {
+    :where(#app,.app-portal) select:open::picker(select) { opacity: 0; transform: translateY(-6px); }
+  }
+
+  :where(#app,.app-portal) option {
+    padding: .55rem .7rem;
+    border-radius: 6px;
+    transition: background-color .18s ease;
+  }
+
+  :where(#app,.app-portal) option:hover, :where(#app,.app-portal) option:checked { background: var(--rw-color-secondary-subtle); }
+
+  :where(#app,.app-portal) select::picker-icon {
+    content: '';
+    display: block;
+    align-self: center;
+    width: .64rem;
+    height: .5rem;
+    margin-block: auto;
+    background: var(--rw-color-disclosure-icon);
+    clip-path: polygon(0 0, 100% 0, 50% 100%);
+    transform-origin: center;
+    transition: background-color .22s ease, rotate .18s ease;
+  }
+
+  :where(#app,.app-portal) select:open::picker-icon { rotate: 180deg; }
+}

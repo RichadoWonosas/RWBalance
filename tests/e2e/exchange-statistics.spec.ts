@@ -53,10 +53,20 @@ test('cross-currency exchange is reported on both sides with implicit tags and c
   const exchangeChart = page.locator('.line-chart.exchange')
   await exchangeChart.hover({ position: { x: 300, y: 100 } })
   await expect(exchangeChart.locator('xpath=..').locator('.chart-tooltip')).toContainText('CNY/JPY')
-  await page.getByText('查看换汇资金流与等价数据').click()
+  const exchangeTableTrigger = page.getByText('查看换汇资金流与等价数据')
+  await exchangeTableTrigger.focus()
+  await page.keyboard.press('Enter')
   const exchangeTable = page.getByRole('table').last()
   await expect(exchangeTable).toContainText('兑换到日元')
   await expect(exchangeTable).toContainText('从人民币兑换')
   await expect(exchangeTable).toContainText('换汇')
+  await page.setViewportSize({ width: 375, height: 760 })
+  const tableOverflow = await exchangeTable.locator('xpath=..').evaluate((region) => ({
+    clientWidth: region.clientWidth,
+    scrollWidth: region.scrollWidth,
+    pageOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  }))
+  expect(tableOverflow.scrollWidth).toBeGreaterThan(tableOverflow.clientWidth)
+  expect(tableOverflow.pageOverflow).toBeLessThanOrEqual(1)
   await page.screenshot({ path: test.info().outputPath('exchange-statistics.png'), fullPage: true })
 })

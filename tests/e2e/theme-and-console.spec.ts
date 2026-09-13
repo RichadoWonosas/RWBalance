@@ -31,6 +31,31 @@ test('search icons are vector shapes centered against their inputs', async ({ pa
   expect(searchIconGeometry.iconText).toBe('')
 })
 
+test('keyboard focus remains visible and reduced motion is immediate', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await page.goto('/')
+  await page.keyboard.press('Tab')
+
+  const focused = page.locator(':focus-visible')
+  await expect(focused).toHaveCount(1)
+  expect(await focused.evaluate((element) => {
+    const style = getComputedStyle(element)
+    return {
+      outlineStyle: style.outlineStyle,
+      outlineWidth: style.outlineWidth,
+      outlineOffset: style.outlineOffset,
+      transitionDurations: style.transitionDuration.split(',').map(value => Number.parseFloat(value) || 0),
+      animationDurations: style.animationDuration.split(',').map(value => Number.parseFloat(value) || 0),
+    }
+  })).toEqual(expect.objectContaining({
+    outlineStyle: 'solid',
+    outlineWidth: '2px',
+    outlineOffset: '2px',
+    transitionDurations: expect.arrayContaining([0.00001]),
+    animationDurations: expect.arrayContaining([0.00001]),
+  }))
+})
+
 test('login and repeated page navigation have named fields and no uncaught errors', async ({ page, browserName }) => {
   const errors: string[] = []
   const issues: string[] = []
@@ -49,8 +74,15 @@ test('login and repeated page navigation have named fields and no uncaught error
   await page.getByLabel('确认口令').fill('test-passphrase')
   await page.getByRole('button', { name: '创建并进入' }).click()
   await expect(page.getByRole('heading', { name: '资金总览' })).toBeVisible()
-  const sidebarLabelStarts = await page.locator('.sidebar .sidebar-button-label').evaluateAll(labels => labels.map(label => label.getBoundingClientRect().left))
-  expect(Math.max(...sidebarLabelStarts) - Math.min(...sidebarLabelStarts)).toBeLessThan(1)
+  const semanticWeights = await page.locator('.app-content :is(h1,h2,h3,h4,h5,h6,strong,b,th):visible').evaluateAll(elements => elements.map(element => ({
+    text: element.textContent?.trim().slice(0, 32),
+    weight: Number.parseInt(getComputedStyle(element).fontWeight, 10),
+  })))
+  expect(semanticWeights.filter(item => item.weight < 700), JSON.stringify(semanticWeights)).toEqual([])
+  if ((page.viewportSize()?.width ?? 0) > 760) {
+    const sidebarLabelStarts = await page.locator('.sidebar .sidebar-button-label').evaluateAll(labels => labels.map(label => label.getBoundingClientRect().left))
+    expect(Math.max(...sidebarLabelStarts) - Math.min(...sidebarLabelStarts)).toBeLessThan(1)
+  }
   await page.locator('nav button').filter({ hasText: '标签' }).click()
   const incomeCategory = page.locator('.tag-category-group').filter({ hasText: 'INCOME TAGS' })
   const titleSpacing = await incomeCategory.locator('.tag-category-title').evaluate((title) => {
@@ -73,7 +105,17 @@ test('login and repeated page navigation have named fields and no uncaught error
   }
   await expect(page.locator('.welcome p')).toHaveCSS('color', 'rgb(255, 255, 255)')
   await page.locator('nav button').filter({ hasText: '设置' }).click()
+  const securityGroup = page.locator('.settings-group').filter({ hasText: 'LEDGER & SECURITY' })
+  const securityShell = securityGroup.locator(':scope > .collapse-shell')
+  expect(await securityShell.locator(':scope > .collapse-content').evaluate(content => Number.parseFloat(getComputedStyle(content).paddingBottom))).toBe(0)
+  await expect.poll(async () => securityShell.evaluate((shell) => {
+    const content = shell.firstElementChild as HTMLElement
+    return Math.abs(shell.getBoundingClientRect().height - content.scrollHeight)
+  })).toBeLessThan(1)
+  const settingsItemColumns = await securityGroup.locator('.settings-item').first().evaluate(item => getComputedStyle(item).gridTemplateColumns.split(' ').length)
+  expect(settingsItemColumns).toBe((page.viewportSize()?.width ?? 0) > 681 ? 2 : 1)
   await page.getByRole('button', { name: /外观/ }).click()
+  await expect.poll(async () => securityShell.evaluate(shell => shell.getBoundingClientRect().height)).toBeLessThan(1)
   await page.locator('.theme-entry').click()
   for (const hue of [0, 60, 120, 180, 225, 270, 330]) {
     await page.getByLabel('色相角度').fill(String(hue))
@@ -85,6 +127,12 @@ test('login and repeated page navigation have named fields and no uncaught error
   await page.locator('.tone-switch').click()
   await expect(toneSwitch).toBeChecked()
   await expect(toneSwitch).toBeEnabled()
+  const darkToneWhiteText = await page.locator('body *:visible').evaluateAll(elements => elements
+    .filter(element => [...element.childNodes].some(node => node.nodeType === Node.TEXT_NODE && node.textContent?.trim()))
+    .filter(element => getComputedStyle(element).color === 'rgb(255, 255, 255)')
+    .map(element => `${element.tagName.toLowerCase()}.${element.className || '-'}:${element.textContent?.trim().slice(0, 40)}`))
+  expect(darkToneWhiteText).toEqual([])
+  expect(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--rw-color-text-on-primary').trim())).toBe('#eeeeee')
   await expect(page.locator('.theme-entry .disclosure-triangle')).toHaveCSS('background-color', /rgb\(153, 17[89], 255\)/)
   await page.getByRole('button', { name: /暂离/ }).click()
   await expect(page.getByRole('heading', { name: '选择一个账本' })).toBeVisible()

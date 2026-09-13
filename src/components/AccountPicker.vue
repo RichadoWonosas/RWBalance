@@ -40,7 +40,7 @@ function choose(accountId: string) {
               v-for="account in filteredAccounts"
               :key="account.id"
               type="button"
-              class="tag"
+              class="tag-chip"
               :class="{ selected: account.id === modelValue }"
               :tabindex="open ? 0 : -1"
               @click="choose(account.id)"

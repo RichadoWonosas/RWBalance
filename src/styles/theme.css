@@ -1,0 +1,104 @@
+:root {
+  --rw-font-family-sans: 'Segoe UI', 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans CJK SC', system-ui, sans-serif;
+  --rw-font-family-serif: 'Noto Serif CJK SC', 'Songti SC', STSong, SimSun, serif;
+  --rw-mobile-navigation-clearance: 8.5rem;
+  font-family: var(--rw-font-family-sans);
+  font-synthesis: none;
+  --rw-theme-primary-hue: 270;
+  --rw-theme-primary-saturation-scale: 1;
+  --rw-theme-primary-lightness-scale: 1;
+  --rw-theme-secondary-saturation-scale: 1;
+  --rw-theme-secondary-lightness-scale: 1;
+  --rw-white-lightness: 100%;
+  --rw-color-banner: var(--rw-color-light-banner, hsl(var(--rw-theme-primary-hue) 80% 60%));
+  --rw-color-scrollbar-thumb: hsl(var(--rw-theme-primary-hue) calc(42% * var(--rw-theme-primary-saturation-scale)) 34%);
+  --rw-color-scrollbar-end: hsl(var(--rw-theme-secondary-hue) calc(38% * var(--rw-theme-secondary-saturation-scale)) 42%);
+  --rw-theme-primary-saturation: 72%;
+  --rw-theme-primary-lightness: 48%;
+  --rw-theme-secondary-hue: 225;
+  --rw-theme-secondary-saturation: 69%;
+  --rw-theme-secondary-lightness: 48%;
+  --rw-color-primary: hsl(var(--rw-theme-primary-hue) var(--rw-theme-primary-saturation) var(--rw-theme-primary-lightness));
+  --rw-color-primary-readable: var(--rw-color-primary);
+  --rw-color-primary-hover: hsl(var(--rw-theme-primary-hue) var(--rw-theme-primary-saturation) calc(var(--rw-theme-primary-lightness) - 8%));
+  --rw-color-primary-subtle: hsl(var(--rw-theme-primary-hue) calc(55% * var(--rw-theme-primary-saturation-scale)) calc(94% * var(--rw-theme-primary-lightness-scale)));
+  --rw-color-secondary: hsl(var(--rw-theme-secondary-hue) var(--rw-theme-secondary-saturation) var(--rw-theme-secondary-lightness));
+  --rw-color-secondary-readable: var(--rw-color-secondary);
+  --rw-color-secondary-subtle: hsl(var(--rw-theme-secondary-hue) calc(82% * var(--rw-theme-secondary-saturation-scale)) calc(89% * var(--rw-theme-secondary-lightness-scale)));
+  --rw-color-accent: hsl(var(--rw-theme-secondary-hue) calc(88% * var(--rw-theme-secondary-saturation-scale)) calc(86% * var(--rw-theme-secondary-lightness-scale)));
+  --rw-color-page-background: hsl(260 20% 96%);
+  --rw-color-surface: hsl(260 30% 99%);
+  --rw-color-control-background: hsl(0 0% var(--rw-white-lightness));
+  --rw-color-text-primary: hsl(260 20% 14%);
+  --rw-color-text-muted: hsl(260 7% 45%);
+  --rw-color-text-on-primary: hsl(0 0% var(--rw-white-lightness));
+  --rw-color-border: hsl(260 16% 88%);
+  --rw-color-border-strong: hsl(260 10% 66%);
+  --rw-color-sidebar-background: hsl(var(--rw-theme-primary-hue) calc(42% * var(--rw-theme-primary-saturation-scale)) calc(20% * var(--rw-theme-primary-lightness-scale)));
+  --rw-color-sidebar-text: hsl(var(--rw-theme-primary-hue) calc(18% * var(--rw-theme-primary-saturation-scale)) calc(78% * var(--rw-theme-primary-lightness-scale)));
+  --rw-color-sidebar-text-muted: hsl(var(--rw-theme-primary-hue) calc(14% * var(--rw-theme-primary-saturation-scale)) calc(68% * var(--rw-theme-primary-lightness-scale)));
+  --rw-color-danger: hsl(354 45% 44%);
+  --rw-color-danger-action: var(--rw-color-danger);
+  --rw-color-danger-soft: hsl(354 58% 94%);
+  --rw-color-disclosure-icon: var(--rw-color-secondary);
+  --rw-color-icon-accent: var(--rw-color-primary);
+  --rw-color-danger-surface: hsl(8 62% 91%);
+  --rw-color-danger-text: hsl(4 54% 32%);
+  --rw-color-warning: hsl(36 58% 56%);
+  --rw-color-warning-surface: hsl(42 100% 97%);
+  --rw-color-success: hsl(143 48% 47%);
+  --rw-color-income: hsl(139 35% 33%);
+  --rw-color-income-readable: var(--rw-color-income);
+  --rw-color-expense: hsl(12 50% 43%);
+  --rw-color-expense-readable: var(--rw-color-expense);
+  --rw-chart-segment-saturation: 68%;
+  --rw-chart-segment-lightness: 52%;
+  --rw-color-chart-axis: var(--rw-color-text-muted);
+  --rw-color-neutral-surface: hsl(250 12% 92%);
+  --rw-color-overlay: hsl(260 30% 12% / 74%);
+  --rw-color-shadow: hsl(260 20% 12% / 18%);
+  --rw-color-shadow-soft: hsl(260 20% 12% / 7%);
+  color: var(--rw-color-text-primary);
+  background: var(--rw-color-page-background);
+}
+
+:root[data-color-tone='dark'] {
+  color-scheme: dark;
+  --rw-white-lightness: 93.333%;
+  --rw-color-text-on-primary: #eeeeee;
+  --rw-color-banner: hsl(var(--rw-theme-primary-hue) calc(66% * var(--rw-theme-primary-saturation-scale)) calc(36% * var(--rw-theme-primary-lightness-scale)));
+  --rw-color-scrollbar-thumb: hsl(var(--rw-theme-primary-hue) calc(40% * var(--rw-theme-primary-saturation-scale)) 80%);
+  --rw-color-scrollbar-end: hsl(var(--rw-theme-secondary-hue) calc(40% * var(--rw-theme-secondary-saturation-scale)) 80%);
+  --rw-color-page-background: hsl(260 16% 10%);
+  --rw-color-surface: hsl(260 15% 14%);
+  --rw-color-control-background: hsl(260 14% 18%);
+  --rw-color-text-primary: hsl(260 18% 91%);
+  --rw-color-text-muted: hsl(260 10% 68%);
+  --rw-color-border: hsl(260 12% 27%);
+  --rw-color-border-strong: hsl(260 10% 42%);
+  --rw-color-disclosure-icon: hsl(var(--rw-theme-secondary-hue) 100% 80%);
+  --rw-color-icon-accent: hsl(var(--rw-theme-primary-hue) 100% 80%);
+  --rw-color-primary-readable: hsl(var(--rw-theme-primary-hue) 100% 80%);
+  --rw-color-secondary-readable: hsl(var(--rw-theme-secondary-hue) 100% 80%);
+  --rw-color-income-readable: hsl(139 100% 80%);
+  --rw-color-expense-readable: hsl(12 100% 80%);
+  --rw-chart-segment-saturation: 100%;
+  --rw-chart-segment-lightness: 80%;
+  --rw-color-chart-axis: var(--rw-color-secondary-readable);
+  --rw-color-danger-action: hsl(354 100% 80%);
+  --rw-color-danger-soft: hsl(354 32% 20%);
+  --rw-color-sidebar-text: hsl(var(--rw-theme-primary-hue) calc(14% * var(--rw-theme-primary-saturation-scale)) calc(80% * var(--rw-theme-primary-lightness-scale)));
+  --rw-color-sidebar-text-muted: hsl(var(--rw-theme-primary-hue) calc(10% * var(--rw-theme-primary-saturation-scale)) calc(66% * var(--rw-theme-primary-lightness-scale)));
+  --rw-color-primary-subtle: hsl(var(--rw-theme-primary-hue) calc(30% * var(--rw-theme-primary-saturation-scale)) calc(22% * var(--rw-theme-primary-lightness-scale)));
+  --rw-color-secondary-subtle: hsl(var(--rw-theme-secondary-hue) calc(35% * var(--rw-theme-secondary-saturation-scale)) calc(23% * var(--rw-theme-secondary-lightness-scale)));
+  --rw-color-neutral-surface: hsl(260 12% 22%);
+  --rw-color-warning-surface: hsl(36 30% 17%);
+  --rw-color-overlay: hsl(260 30% 4% / 78%);
+  --rw-color-shadow: hsl(0 0% 0% / 38%);
+  --rw-color-shadow-soft: hsl(0 0% 0% / 18%);
+}
+
+:root[data-color-tone='dark'] .notice { color: var(--rw-color-text-primary); }
+:root[data-color-tone='dark'] .tag-path,
+:root[data-color-tone='dark'] .tag-stat-currencies li span,
+:root[data-color-tone='dark'] .implicit-tag-summary { color: var(--rw-color-secondary-readable); }

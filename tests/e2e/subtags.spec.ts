@@ -60,12 +60,57 @@ test('nested tag management, implicit selections, edit/correction and non-overla
   await page.getByRole('button', { name: /批量添加标签/ }).click()
   const cancelledWizard = page.getByRole('dialog', { name: '批量添加标签' })
   await expect(cancelledWizard.locator('[name="tag-parent-category"]')).toHaveValue('income')
+  if (page.viewportSize()!.width > 520) {
+    const entryAlignment = await cancelledWizard.locator('.tag-wizard-entry').evaluate((entry) => {
+      const input = entry.querySelector<HTMLInputElement>('input')!.getBoundingClientRect()
+      const button = entry.querySelector<HTMLButtonElement>('button')!.getBoundingClientRect()
+      return {
+        top: Math.abs(input.top - button.top),
+        bottom: Math.abs(input.bottom - button.bottom),
+        height: Math.abs(input.height - button.height),
+        inputHeight: input.height,
+        buttonHeight: button.height,
+        inputCssHeight: getComputedStyle(entry.querySelector<HTMLInputElement>('input')!).height,
+        buttonCssHeight: getComputedStyle(entry.querySelector<HTMLButtonElement>('button')!).height,
+      }
+    })
+    expect(entryAlignment.top, JSON.stringify(entryAlignment)).toBeLessThan(1)
+    expect(entryAlignment.bottom).toBeLessThan(1)
+    expect(entryAlignment.height).toBeLessThan(1)
+  }
   await cancelledWizard.locator('[name="tag-wizard-name"]').fill('尚未确认的收入标签')
   await cancelledWizard.getByRole('button', { name: '加入列表', exact: true }).click()
   await expect(cancelledWizard.locator('.tag-wizard-pending')).toContainText('尚未确认的收入标签')
   await expect(cancelledWizard.locator('.tag-wizard-pending')).not.toContainText('其他收入')
   await cancelledWizard.getByRole('button', { name: '取消', exact: true }).click()
   await expect(page.locator('.tag-category-group').filter({ hasText: 'INCOME TAGS' }).locator('.tag-management-list')).not.toContainText('尚未确认的收入标签')
+  const expenseGroup = page.locator('.tag-category-group').filter({ hasText: 'EXPENSE TAGS' })
+  await expenseGroup.locator('.settings-group-trigger').click()
+  const expenseSearch = expenseGroup.locator('[name="tag-search-expense"]')
+  const searchClearance = async () => expenseGroup.evaluate((group) => {
+    const trigger = group.querySelector<HTMLElement>(':scope > .settings-group-trigger')!.getBoundingClientRect()
+    const input = group.querySelector<HTMLInputElement>('[name="tag-search-expense"]')!.getBoundingClientRect()
+    return input.top - trigger.bottom
+  })
+  await expect.poll(searchClearance).toBeGreaterThanOrEqual(15)
+  await expenseSearch.focus()
+  await expect.poll(searchClearance).toBeGreaterThanOrEqual(14)
+  await expenseSearch.fill('123')
+  const filteredAddButton = expenseGroup.getByRole('button', { name: '添加', exact: true })
+  const filteredAddGeometry = await filteredAddButton.evaluate((button) => ({
+    width: button.getBoundingClientRect().width,
+    oneLine: button.scrollHeight <= button.clientHeight,
+    whiteSpace: getComputedStyle(button).whiteSpace,
+  }))
+  expect(filteredAddGeometry.width).toBeGreaterThanOrEqual(80)
+  expect(filteredAddGeometry.oneLine).toBe(true)
+  expect(filteredAddGeometry.whiteSpace).toBe('nowrap')
+  await filteredAddButton.click()
+  const prefilledWizard = page.getByRole('dialog', { name: '批量添加标签' })
+  await expect(prefilledWizard.locator('[name="tag-parent-category"]')).toHaveValue('expense')
+  await expect(prefilledWizard.locator('[name="tag-wizard-name"]')).toHaveValue('123')
+  await prefilledWizard.getByRole('button', { name: '取消', exact: true }).click()
+  await expenseGroup.locator('[name="tag-search-expense"]').fill('')
   await addTag(page, '游戏付款', '娱乐')
   await addTag(page, '游戏内购买', '娱乐 › 游戏付款')
   await addTag(page, '电影', '娱乐')
@@ -75,7 +120,15 @@ test('nested tag management, implicit selections, edit/correction and non-overla
   await page.getByLabel('访问口令', { exact: true }).fill('test-passphrase')
   await page.getByRole('button', { name: '解锁账本', exact: true }).click()
   await page.locator('nav button').filter({ hasText: '标签' }).click()
-  await page.locator('.tag-category-group').filter({ hasText: 'EXPENSE TAGS' }).locator('.settings-group-trigger').click()
+  const expenseCategory = page.locator('.tag-category-group').filter({ hasText: 'EXPENSE TAGS' })
+  const categoryShell = expenseCategory.locator(':scope > .collapse-shell')
+  expect(await categoryShell.evaluate(shell => shell.getBoundingClientRect().height)).toBeLessThan(1)
+  expect(await categoryShell.locator(':scope > .collapse-content').evaluate(content => Number.parseFloat(getComputedStyle(content).paddingBottom))).toBe(0)
+  await expenseCategory.locator('.settings-group-trigger').click()
+  await expect.poll(async () => categoryShell.evaluate((shell) => {
+    const content = shell.firstElementChild as HTMLElement
+    return Math.abs(shell.getBoundingClientRect().height - content.scrollHeight)
+  })).toBeLessThan(1)
   // Collapsed descendants stay mounted so CSS can interpolate their height smoothly.
   await expect(page.locator('.tag-category-group.open .tag-management-list article')).toHaveCount(7)
   await expect(page.locator('.tag-category-group.open .tag-tree-collapse.open article')).toHaveCount(4)
@@ -98,28 +151,28 @@ test('nested tag management, implicit selections, edit/correction and non-overla
   await page.locator('[name="draft-form-source-amount"]').fill('10')
   await page.getByRole('button', { name: '选择标签', exact: true }).click()
   const picker = page.getByRole('dialog', { name: '选择标签', exact: true })
-  const leaf = picker.locator('.tag-selection .tag').filter({ hasText: '游戏内购买' })
-  const parent = picker.locator('.tag-selection .tag.inherited')
+  const leaf = picker.locator('.tag-selection .tag-chip').filter({ hasText: '游戏内购买' })
+  const parent = picker.locator('.tag-selection .tag-chip.inherited')
   await leaf.click()
-  await expect(picker.locator('.tag.inherited')).toHaveCount(2)
-  await picker.locator('.tag-selection .tag').filter({ hasText: '娱乐 › 电影' }).click()
+  await expect(picker.locator('.tag-chip.inherited')).toHaveCount(2)
+  await picker.locator('.tag-selection .tag-chip').filter({ hasText: '娱乐 › 电影' }).click()
   await leaf.click()
-  await expect(picker.locator('.tag.inherited')).toHaveCount(1)
+  await expect(picker.locator('.tag-chip.inherited')).toHaveCount(1)
   await parent.click()
   await expect(picker.getByText('同时取消这些子标签', { exact: true })).toBeVisible()
   await picker.getByRole('button', { name: '保留选择' }).click()
-  await picker.locator('.tag.inherited').dblclick()
-  await expect(picker.locator('.tag.primaryTag')).toContainText('娱乐')
-  await expect(picker.locator('.tag.primaryTag b')).toHaveText('主')
+  await picker.locator('.tag-chip.inherited').dblclick()
+  await expect(picker.locator('.tag-chip.primaryTag')).toContainText('娱乐')
+  await expect(picker.locator('.tag-chip.primaryTag b')).toHaveText('主')
   // Reopen to isolate the branch-removal path from browser-specific native
   // double-click event timing while retaining the explicit dblclick assertion.
   await picker.getByRole('button', { name: '取消', exact: true }).click()
   await page.getByRole('button', { name: '选择标签', exact: true }).click()
   await leaf.click()
-  await expect(picker.locator('.tag.inherited')).toHaveCount(2)
-  await picker.locator('.tag-selection .tag.inherited').filter({ hasText: /^娱乐由子标签带入$/ }).click()
+  await expect(picker.locator('.tag-chip.inherited')).toHaveCount(2)
+  await picker.locator('.tag-selection .tag-chip.inherited').filter({ hasText: /^娱乐由子标签带入$/ }).click()
   await picker.getByRole('button', { name: '同时取消这些子标签' }).click()
-  await expect(picker.locator('.tag-selection .tag.selected')).toHaveCount(0)
+  await expect(picker.locator('.tag-selection .tag-chip.selected')).toHaveCount(0)
   await leaf.click()
   await picker.getByRole('button', { name: '确认', exact: true }).click()
   await page.getByRole('button', { name: '加入待提交列表' }).click()
@@ -227,7 +280,7 @@ test('legacy file import uses the migration gate and temporary tag cancellation 
   await picker.getByRole('listbox', { name: '新建标签的父级' }).getByRole('button', { name: '娱乐', exact: true }).click()
   await picker.locator('[name="tag-picker-search"]').fill('取消的临时子标签')
   await picker.locator('[name="tag-picker-search"]').press('Enter')
-  await expect(picker.locator('.tag-selection .tag')).toContainText(['娱乐 › 取消的临时子标签', '出行', '饮食', '娱乐', '生活'])
+  await expect(picker.locator('.tag-selection .tag-chip')).toContainText(['娱乐 › 取消的临时子标签', '出行', '饮食', '娱乐', '生活'])
   await expect(picker.locator('.inherited')).toHaveCount(1)
   await picker.getByRole('button', { name: '取消', exact: true }).click()
   await page.getByRole('button', { name: '选择标签', exact: true }).click()

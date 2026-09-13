@@ -32,9 +32,9 @@ watch(category, () => {
     <div class="collapse-shell" :class="{ open: forcedOpen || expanded }" :inert="!forcedOpen && !expanded"><div class="collapse-content">
       <div class="tag-parent-panel">
         <label class="search"><span class="search-icon" aria-hidden="true"></span><input name="tag-parent-search" v-model="search" placeholder="筛选可选父标签" /></label>
-        <div class="tag-parent-options" role="listbox" aria-label="新建标签的父级">
-          <button type="button" class="tag" :class="{ selected: !parentId }" :aria-selected="!parentId" @click="parentId = ''">根标签（无父级）</button>
-          <button v-for="row in visibleTags" :key="row.tag.id" type="button" class="tag" :class="{ selected: parentId === row.tag.id }" :aria-selected="parentId === row.tag.id" @click="parentId = row.tag.id"><span>{{ tagPath(categoryTags, row.tag.id) }}</span><small v-if="row.tag.isNew">本次新建</small></button>
+        <div class="tag-parent-options flex max-h-[190px] flex-wrap gap-2 overflow-auto p-[.15rem]" role="listbox" aria-label="新建标签的父级">
+          <button type="button" class="tag-chip" :class="{ selected: !parentId }" :aria-selected="!parentId" @click="parentId = ''">根标签（无父级）</button>
+          <button v-for="row in visibleTags" :key="row.tag.id" type="button" class="tag-chip" :class="{ selected: parentId === row.tag.id }" :aria-selected="parentId === row.tag.id" @click="parentId = row.tag.id"><span>{{ tagPath(categoryTags, row.tag.id) }}</span><small v-if="row.tag.isNew">本次新建</small></button>
         </div>
       </div>
     </div></div>

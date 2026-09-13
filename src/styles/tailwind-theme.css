@@ -1,0 +1,28 @@
+/* Tailwind-owned design tokens. Runtime theme values stay in theme.css. */
+@theme inline {
+  --font-sans: var(--rw-font-family-sans);
+  --font-serif: var(--rw-font-family-serif);
+
+  --color-app-page: var(--rw-color-page-background);
+  --color-app-surface: var(--rw-color-surface);
+  --color-app-control: var(--rw-color-control-background);
+  --color-app-text: var(--rw-color-text-primary);
+  --color-app-muted: var(--rw-color-text-muted);
+  --color-app-border: var(--rw-color-border);
+  --color-app-primary: var(--rw-color-primary);
+  --color-app-primary-readable: var(--rw-color-primary-readable);
+  --color-app-secondary: var(--rw-color-secondary);
+  --color-app-secondary-readable: var(--rw-color-secondary-readable);
+  --color-app-danger: var(--rw-color-danger-action);
+  --color-app-income: var(--rw-color-income-readable);
+  --color-app-expense: var(--rw-color-expense-readable);
+  --color-app-success: var(--rw-color-success);
+  --color-app-warning: var(--rw-color-warning);
+
+  /* Values represent the first pixel of the next layout tier. */
+  --breakpoint-compact: 32.5625rem;
+  --breakpoint-settings: 42.5625rem;
+  --breakpoint-mobile: 47.5625rem;
+  --breakpoint-desktop: 62.5625rem;
+  --breakpoint-wide: 75.0625rem;
+}
