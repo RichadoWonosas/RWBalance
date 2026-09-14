@@ -56,6 +56,21 @@ test('keyboard focus remains visible and reduced motion is immediate', async ({ 
   }))
 })
 
+test('non-sidebar neutral actions regain visible hover feedback', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: /新建账本/ }).click()
+  const action = page.getByRole('button', { name: /高级设置/ })
+  const initial = await action.evaluate((element) => ({
+    background: getComputedStyle(element).backgroundColor,
+    shadow: getComputedStyle(element).boxShadow,
+  }))
+  await action.hover()
+  await expect.poll(async () => action.evaluate((element) => ({
+    background: getComputedStyle(element).backgroundColor,
+    shadow: getComputedStyle(element).boxShadow,
+  }))).not.toEqual(initial)
+})
+
 test('login and repeated page navigation have named fields and no uncaught errors', async ({ page, browserName }) => {
   const errors: string[] = []
   const issues: string[] = []

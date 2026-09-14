@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { rootTagId, tagPath } from '../core/domain/tag-hierarchy'
 import { vBackdropDismiss } from '../app/backdrop-dismiss'
 import { currencies, type Currency } from '../core/domain/types'
@@ -28,6 +28,7 @@ const donutHoverId = ref<string | null>(null)
 interface ChartTooltipPosition { left: number; top: number; horizontal: 'left' | 'right'; vertical: 'above' | 'below' }
 const trendTooltipPosition = reactive<ChartTooltipPosition>({ left: 0, top: 0, horizontal: 'left', vertical: 'below' })
 const exchangeTooltipPosition = reactive<ChartTooltipPosition>({ left: 0, top: 0, horizontal: 'left', vertical: 'below' })
+const donutTooltipPosition = reactive<ChartTooltipPosition>({ left: 80, top: 75, horizontal: 'left', vertical: 'below' })
 type DataTableKey = 'accounts' | 'trend' | 'donut' | 'exchange'
 const openDataTables = reactive<Record<DataTableKey, boolean>>({ accounts: false, trend: false, donut: false, exchange: false })
 const statTagName = (tagId: string) => implicitTagName(tagId) ?? (tagPath(props.ledger.tags, tagId) || '系统标签')
@@ -87,7 +88,7 @@ function nearestChartIndex(event: PointerEvent, count: number) {
   return count === 1 ? 0 : Math.round(ratio * (count - 1))
 }
 function moveChartTooltip(event: PointerEvent, position: ChartTooltipPosition) {
-  const stage = (event.currentTarget as SVGSVGElement).closest<HTMLElement>('.chart-stage')
+  const stage = (event.currentTarget as Element).closest<HTMLElement>('.chart-stage, .donut-layout')
   if (!stage) return
   const rect = stage.getBoundingClientRect()
   position.left = Math.max(0, Math.min(rect.width, event.clientX - rect.left))
@@ -103,6 +104,21 @@ function updateExchangeHover(event: PointerEvent) {
   exchangeHoverIndex.value = nearestChartIndex(event, selectedExchange.value.length)
   moveChartTooltip(event, exchangeTooltipPosition)
 }
+function updateDonutHover(event: PointerEvent, tagId: string) {
+  donutHoverId.value = tagId
+  moveChartTooltip(event, donutTooltipPosition)
+}
+function focusDonut(tagId: string) {
+  donutHoverId.value = tagId
+  Object.assign(donutTooltipPosition, { left: 80, top: 75, horizontal: 'left', vertical: 'below' })
+}
+function clearChartHovers() {
+  trendHoverIndex.value = null
+  exchangeHoverIndex.value = null
+  donutHoverId.value = null
+}
+onMounted(() => window.addEventListener('resize', clearChartHovers))
+onBeforeUnmount(() => window.removeEventListener('resize', clearChartHovers))
 function chartTooltipStyle(position: ChartTooltipPosition) {
   const x = position.horizontal === 'left' ? '.75rem' : 'calc(-100% - .75rem)'
   const y = position.vertical === 'below' ? '.75rem' : 'calc(-100% - .75rem)'
@@ -246,7 +262,7 @@ async function savePng() { await drawReport(); reportCanvas.value?.toBlob((blob)
     </section>
     <section class="surface !mt-0 !mb-4">
       <span class="eyebrow">PRIMARY TAGS</span><h3>支出类型圆环图 · {{ chartCurrency }}</h3><label>主标签统计口径<select name="primary-grouping" v-model="primaryGrouping"><option value="exact">精确主标签</option><option value="root">按根级祖先汇总</option></select></label><p class="field-help">每笔支出仅计入一个扇区，父子标签不重复计费。</p>
-      <div class="donut-layout grid grid-cols-1 justify-items-center gap-[1.2rem] compact:grid-cols-[160px_1fr] compact:items-center compact:justify-items-stretch"><div class="donut-shell relative grid min-h-[170px] w-40 place-items-center"><svg class="donut-chart" viewBox="0 0 120 120" role="img" aria-label="主标签支出比例图"><circle v-if="!donutSlices.length" class="donut-empty" cx="60" cy="60" r="33.5"/><path v-for="slice in donutSlices" :key="slice.tagId" class="donut-slice" :class="{ hovered: donutHoverId === slice.tagId }" :d="slice.path" :fill="slice.color" fill-rule="evenodd" tabindex="0" @mouseenter="donutHoverId = slice.tagId" @mouseleave="donutHoverId = null" @focus="donutHoverId = slice.tagId" @blur="donutHoverId = null"><title>{{ slice.name }}：{{ slice.percent.toFixed(1) }}%</title></path><text class="donut-count" x="60" y="64" text-anchor="middle">{{ tagTotals.primary.length }} 类</text></svg><div v-if="hoveredDonutSlice" class="chart-tooltip donut-tooltip"><strong>{{ hoveredDonutSlice.name }}</strong><span>{{ formatMinorUnits(hoveredDonutSlice.value, chartCurrency) }}</span><span>{{ hoveredDonutSlice.percent.toFixed(1) }}%</span></div></div><ol class="m-0 w-full list-none p-0"><li v-for="row in tagTotals.primary" :key="row.tagId" class="flex justify-between gap-[.6rem] py-[.34rem]" @mouseenter="donutHoverId = row.tagId" @mouseleave="donutHoverId = null"><button @focus="donutHoverId = row.tagId" @blur="donutHoverId = null" @click="drillTag(row.tagId, 'primary')">{{ row.name }}</button><b>{{ formatMinorUnits(row.value,chartCurrency) }}</b></li></ol></div>
+      <div class="donut-layout relative grid grid-cols-1 justify-items-center gap-[1.2rem] compact:grid-cols-[160px_1fr] compact:items-center compact:justify-items-stretch"><div class="donut-shell grid min-h-[170px] w-40 place-items-center"><svg class="donut-chart" viewBox="0 0 120 120" role="img" aria-label="主标签支出比例图" @pointerleave="donutHoverId = null"><circle v-if="!donutSlices.length" class="donut-empty" cx="60" cy="60" r="33.5"/><path v-for="slice in donutSlices" :key="slice.tagId" class="donut-slice" :class="{ hovered: donutHoverId === slice.tagId }" :d="slice.path" :fill="slice.color" fill-rule="evenodd" tabindex="0" @pointerenter="updateDonutHover($event, slice.tagId)" @pointermove="updateDonutHover($event, slice.tagId)" @focus="focusDonut(slice.tagId)" @blur="donutHoverId = null"><title>{{ slice.name }}：{{ slice.percent.toFixed(1) }}%</title></path><text class="donut-count" x="60" y="64" text-anchor="middle">{{ tagTotals.primary.length }} 类</text></svg></div><ol class="m-0 w-full list-none p-0"><li v-for="row in tagTotals.primary" :key="row.tagId" class="flex justify-between gap-[.6rem] py-[.34rem]" @pointerenter="updateDonutHover($event, row.tagId)" @pointermove="updateDonutHover($event, row.tagId)" @pointerleave="donutHoverId = null"><button @focus="focusDonut(row.tagId)" @blur="donutHoverId = null" @click="drillTag(row.tagId, 'primary')">{{ row.name }}</button><b>{{ formatMinorUnits(row.value,chartCurrency) }}</b></li></ol><div v-if="hoveredDonutSlice" class="chart-tooltip donut-tooltip" :style="chartTooltipStyle(donutTooltipPosition)"><strong>{{ hoveredDonutSlice.name }}</strong><span>{{ formatMinorUnits(hoveredDonutSlice.value, chartCurrency) }}</span><span>{{ hoveredDonutSlice.percent.toFixed(1) }}%</span></div></div>
       <div class="data-table-disclosure"><button class="data-table-trigger" :aria-expanded="openDataTables.donut" @click="openDataTables.donut = !openDataTables.donut">查看等价数据表<span class="disclosure-triangle" :class="{ expanded: openDataTables.donut }" aria-hidden="true"></span></button><div class="collapse-shell" :class="{ open: openDataTables.donut }" :inert="!openDataTables.donut"><div class="collapse-content"><table><tbody><tr v-for="row in tagTotals.primary" :key="row.tagId"><th>{{ row.name }}</th><td>{{ formatMinorUnits(row.value,chartCurrency) }}</td></tr></tbody></table></div></div></div>
     </section>
   </div>

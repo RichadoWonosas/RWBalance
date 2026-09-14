@@ -55,6 +55,7 @@
   --rw-chart-segment-lightness: 52%;
   --rw-color-chart-axis: var(--rw-color-text-muted);
   --rw-color-neutral-surface: hsl(250 12% 92%);
+  --rw-color-tooltip-background: hsl(260 30% 99% / 66%);
   --rw-color-overlay: hsl(260 30% 12% / 74%);
   --rw-color-shadow: hsl(260 20% 12% / 18%);
   --rw-color-shadow-soft: hsl(260 20% 12% / 7%);
@@ -92,6 +93,7 @@
   --rw-color-primary-subtle: hsl(var(--rw-theme-primary-hue) calc(30% * var(--rw-theme-primary-saturation-scale)) calc(22% * var(--rw-theme-primary-lightness-scale)));
   --rw-color-secondary-subtle: hsl(var(--rw-theme-secondary-hue) calc(35% * var(--rw-theme-secondary-saturation-scale)) calc(23% * var(--rw-theme-secondary-lightness-scale)));
   --rw-color-neutral-surface: hsl(260 12% 22%);
+  --rw-color-tooltip-background: hsl(260 15% 14% / 66%);
   --rw-color-warning-surface: hsl(36 30% 17%);
   --rw-color-overlay: hsl(260 30% 4% / 78%);
   --rw-color-shadow: hsl(0 0% 0% / 38%);

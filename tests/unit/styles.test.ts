@@ -37,8 +37,22 @@ describe('stylesheet maintenance constraints', () => {
   it('keeps non-layout interaction feedback explicit', () => {
     expect(ui).toMatch(/button:disabled\s*\{[^}]*cursor:\s*not-allowed/)
     expect(ui).toMatch(/:focus-visible\s*\{[^}]*outline:[^}]*outline-offset:/)
+    expect(ui).toContain('.ghost:where(:hover:not(:disabled))')
+    expect(ui).toContain('.danger:where(:hover:not(:disabled))')
+    expect(ui).toContain('.link-button:hover')
+    expect(ui).toContain('.tag-chip:where(:hover:not(:disabled))')
+    expect(ui).toContain('.pending-list button:hover')
+    expect(ui).toContain('.rank-list button:hover')
     expect(ui).toContain('.modal-close:hover .modal-close-icon { transform:rotate(90deg); }')
     expect(ui).not.toMatch(/\.modal-close:hover\s*\{[^}]*transform:/)
+  })
+
+  it('keeps chart tooltips translucent without fading their contents', () => {
+    expect(theme.match(/--rw-color-tooltip-background:\s*hsl\([^;]+\/ 66%\);/g)).toHaveLength(2)
+    expect(ui).toContain('background:var(--rw-color-tooltip-background)')
+    expect(ui).not.toMatch(/\.chart-tooltip\s*\{[^}]*\bopacity:\s*\.66/)
+    expect(analyticsPage).toContain(':style="chartTooltipStyle(donutTooltipPosition)"')
+    expect(analyticsPage).toContain('@pointermove="updateDonutHover($event, slice.tagId)"')
   })
 
   it('restores semantic emphasis removed by Tailwind Preflight', () => {
