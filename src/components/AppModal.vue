@@ -40,7 +40,7 @@ function trapFocus(event: KeyboardEvent) {
   <Transition name="modal-motion">
     <div v-if="open" class="modal-backdrop" v-backdrop-dismiss="() => emit('close')">
       <section ref="panel" class="modal" role="dialog" aria-modal="true" :aria-label="ariaLabel" tabindex="-1" :class="{ 'theme-modal': theme, 'transaction-entry-modal': size === 'transaction', 'tag-resolution-modal': size === 'resolution' }" @keydown="trapFocus">
-        <button class="modal-close" aria-label="关闭对话框" @click="emit('close')">×</button>
+        <button class="modal-close" aria-label="关闭对话框" @click="emit('close')"><span class="modal-close-icon" aria-hidden="true"></span></button>
         <Transition name="dialog-step" mode="out-in"><div :key="contentKey" class="dialog-step"><slot /></div></Transition>
       </section>
     </div>

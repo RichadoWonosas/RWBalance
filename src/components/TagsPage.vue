@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive } from 'vue'
+import { reactive, ref } from 'vue'
 import type { Tag, TagCategory } from '../core/domain/types'
 import { expandTagAncestors, flattenTagHierarchy, tagPath } from '../core/domain/tag-hierarchy'
 
@@ -25,6 +25,7 @@ const emit = defineEmits<{
 }>()
 
 const searches = reactive<Record<TagCategory, string>>({ income: '', expense: '' })
+const hierarchyHistoryOpen = ref(false)
 const expandedIds = defineModel<string[]>('expandedIds', { required: true })
 const normalizeSearch = (value: string) => value.trim().normalize('NFKC').toLocaleLowerCase()
 
@@ -77,5 +78,8 @@ defineExpose({ expandTagPath })
       <div v-if="!treeRows(category).some(row => row.visible)" class="empty compact">没有符合筛选条件的标签</div>
     </div></div></div>
   </section>
-  <details v-if="hierarchyChanges.length" class="hierarchy-history surface"><summary>层级变更记录（{{ hierarchyChanges.length }}）</summary><ol><li v-for="(change, index) in [...hierarchyChanges].reverse()" :key="index">{{ new Date(change.changedAt).toLocaleString('zh-CN') }} · {{ nameOf(change.tagId) }} · {{ change.action === 'delete' ? '删除标签' : nameOf(change.previousParentId) + ' → ' + nameOf(change.parentId) }} · 影响 {{ change.affectedTransactions }} 条记录</li></ol></details>
+  <section v-if="hierarchyChanges.length" class="hierarchy-history surface settings-group !p-0 overflow-clip" :class="{ open: hierarchyHistoryOpen }">
+    <button type="button" class="settings-group-trigger flex w-full items-center justify-between gap-4 px-[1.35rem] py-[1.2rem] text-left" :aria-expanded="hierarchyHistoryOpen" @click="hierarchyHistoryOpen = !hierarchyHistoryOpen"><span class="min-w-0"><span class="eyebrow">HIERARCHY HISTORY</span><strong>层级变更记录（{{ hierarchyChanges.length }}）</strong></span><span class="disclosure-triangle" :class="{ expanded: hierarchyHistoryOpen }" aria-hidden="true"></span></button>
+    <div class="collapse-shell" :class="{ open: hierarchyHistoryOpen }" :inert="!hierarchyHistoryOpen"><div class="collapse-content"><ol class="m-0 max-h-72 overflow-auto px-[2.6rem] pb-[1.35rem] pt-1 leading-[1.8]"><li v-for="(change, index) in [...hierarchyChanges].reverse()" :key="index">{{ new Date(change.changedAt).toLocaleString('zh-CN') }} · {{ nameOf(change.tagId) }} · {{ change.action === 'delete' ? '删除标签' : nameOf(change.previousParentId) + ' → ' + nameOf(change.parentId) }} · 影响 {{ change.affectedTransactions }} 条记录</li></ol></div></div>
+  </section>
 </template>

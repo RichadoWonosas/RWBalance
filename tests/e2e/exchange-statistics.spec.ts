@@ -41,10 +41,17 @@ test('cross-currency exchange is reported on both sides with implicit tags and c
   const chartWidthRatio = await cashFlowChart.evaluate((chart) => chart.getBoundingClientRect().width / chart.parentElement!.getBoundingClientRect().width)
   expect(chartWidthRatio).toBeGreaterThan(.98)
   await expect(cashFlowChart.locator('.chart-axis text').first()).toHaveCSS('font-size', '12px')
-  await cashFlowChart.hover({ position: { x: 220, y: 100 } })
+  const cashFlowBox = (await cashFlowChart.boundingBox())!
+  await cashFlowChart.hover({ position: { x: cashFlowBox.width * .2, y: cashFlowBox.height * .2 } })
   await expect(cashFlowChart.locator('.hover-guide')).toHaveCount(1)
   await expect(cashFlowChart.locator('.data-point.active')).toHaveCount(2)
-  await expect(cashFlowChart.locator('xpath=..').locator('.chart-tooltip')).toContainText('收入')
+  const cashFlowTooltip = cashFlowChart.locator('xpath=..').locator('.chart-tooltip')
+  await expect(cashFlowTooltip).toContainText('收入')
+  const firstTooltipBox = (await cashFlowTooltip.boundingBox())!
+  await cashFlowChart.hover({ position: { x: cashFlowBox.width * .35, y: cashFlowBox.height * .35 } })
+  const movedTooltipBox = (await cashFlowTooltip.boundingBox())!
+  expect(movedTooltipBox.x - firstTooltipBox.x).toBeGreaterThan(cashFlowBox.width * .1)
+  expect(movedTooltipBox.y - firstTooltipBox.y).toBeGreaterThan(cashFlowBox.height * .1)
   const donutSlice = page.locator('.donut-slice').first()
   await page.locator('.donut-layout li').first().hover()
   await expect(donutSlice).toHaveClass(/hovered/)

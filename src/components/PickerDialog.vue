@@ -24,7 +24,7 @@ function keyboard(event: KeyboardEvent) {
   <Teleport to="body"><Transition name="modal-motion">
     <div v-if="open" class="modal-backdrop picker-backdrop app-portal" v-backdrop-dismiss="() => emit('close')" @keydown="keyboard">
       <section ref="panel" class="modal picker-dialog" :class="{ wide }" role="dialog" aria-modal="true" :aria-label="title" tabindex="-1">
-        <button class="modal-close" aria-label="关闭选择器" @click="emit('close')">×</button>
+        <button class="modal-close" aria-label="关闭选择器" @click="emit('close')"><span class="modal-close-icon" aria-hidden="true"></span></button>
         <h2>{{ title }}</h2><slot />
       </section>
     </div>

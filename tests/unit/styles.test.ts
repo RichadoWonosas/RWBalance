@@ -37,6 +37,8 @@ describe('stylesheet maintenance constraints', () => {
   it('keeps non-layout interaction feedback explicit', () => {
     expect(ui).toMatch(/button:disabled\s*\{[^}]*cursor:\s*not-allowed/)
     expect(ui).toMatch(/:focus-visible\s*\{[^}]*outline:[^}]*outline-offset:/)
+    expect(ui).toContain('.modal-close:hover .modal-close-icon { transform:rotate(90deg); }')
+    expect(ui).not.toMatch(/\.modal-close:hover\s*\{[^}]*transform:/)
   })
 
   it('restores semantic emphasis removed by Tailwind Preflight', () => {

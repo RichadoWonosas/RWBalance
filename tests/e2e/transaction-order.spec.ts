@@ -36,9 +36,21 @@ test('same-second modification order is draggable and filters fold independently
   await expect(page.getByRole('button', { name: /^筛选 · 1/ })).toHaveClass(/active/)
 
   await expect(page.locator('.transaction-list article').first()).toContainText('后暂存')
-  await page.getByRole('button', { name: /顺序调整向导/ }).click()
+  const orderButton = page.getByRole('button', { name: /顺序调整向导/ })
+  await expect(orderButton).toContainText('1 组同秒账目')
+  await orderButton.click()
   const wizard = page.getByRole('dialog', { name: '修改顺序调整向导' })
   await expect(wizard.locator('.transaction-order-list article')).toHaveCount(2)
+  await wizard.evaluate(async element => { await Promise.all(element.getAnimations({ subtree: true }).map(animation => animation.finished.catch(() => {}))) })
+  const orderPositionBox = (await wizard.locator('.order-position').first().boundingBox())!
+  expect(Math.abs(orderPositionBox.width - orderPositionBox.height)).toBeLessThan(.5)
+  expect(orderPositionBox.width).toBe(30)
+  const closeButton = wizard.getByRole('button', { name: '关闭对话框' })
+  await closeButton.hover()
+  const closeButtonBox = (await closeButton.boundingBox())!
+  const closeIconBox = (await closeButton.locator('.modal-close-icon').boundingBox())!
+  expect(Math.abs(closeIconBox.x + closeIconBox.width / 2 - (closeButtonBox.x + closeButtonBox.width / 2))).toBeLessThan(.5)
+  expect(Math.abs(closeIconBox.y + closeIconBox.height / 2 - (closeButtonBox.y + closeButtonBox.height / 2))).toBeLessThan(.5)
   await wizard.locator('.drag-handle').first().dragTo(wizard.locator('.transaction-order-list article').nth(1))
   await expect(wizard.locator('.transaction-order-list article').first()).toContainText('先暂存')
   await wizard.locator('.transaction-order-list').evaluate(async (element) => { await Promise.all(element.getAnimations({ subtree: true }).map((animation) => animation.finished.catch(() => {}))) })
